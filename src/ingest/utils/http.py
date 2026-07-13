@@ -41,6 +41,43 @@ class FixtureClient:
         pass
 
 
+class UrllibClient:
+    """Real HTTP over the stdlib (urllib) — zero dependencies. Blocking work is
+    pushed to a thread so it satisfies the async `send` contract. Used by the
+    recorder and offline `--dry` runs so they work with no pip installs; the
+    production workers use HttpxClient for real concurrency.
+    """
+
+    def __init__(self, *, timeout: float = 30.0, default_headers: dict | None = None):
+        self._timeout = timeout
+        self._headers = default_headers or {"User-Agent": "ingest/0.1 (+hs)"}
+
+    def _blocking(self, req: Request) -> Response:
+        import urllib.request
+        import urllib.error
+        data = None
+        headers = dict(self._headers)
+        if req.headers:
+            headers.update(req.headers)
+        if req.json is not None:
+            import json as _json
+            data = _json.dumps(req.json).encode()
+            headers.setdefault("Content-Type", "application/json")
+        r = urllib.request.Request(req.url, data=data, headers=headers, method=req.method)
+        try:
+            with urllib.request.urlopen(r, timeout=self._timeout) as resp:
+                return Response(status=resp.status, body=resp.read(),
+                                headers=dict(resp.headers))
+        except urllib.error.HTTPError as e:
+            return Response(status=e.code, body=e.read(), headers=dict(e.headers or {}))
+
+    async def send(self, req: Request) -> Response:
+        return await asyncio.to_thread(self._blocking, req)
+
+    async def aclose(self) -> None:
+        pass
+
+
 class HttpxClient:
     """Real client. httpx is imported lazily so core + tests never need it.
 

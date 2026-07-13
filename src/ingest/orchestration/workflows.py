@@ -1,25 +1,31 @@
-"""Temporal workflows. DETERMINISTIC — decisions only, no IO, no clocks.
+"""Temporal workflows — DETERMINISTIC (decisions only, no IO, no clocks).
 
-    PlatformRun   parent, one per platform per night. Reads a frozen RunPlan
-                  (from plan_run activity), fans out children, does not wait on
-                  stragglers.
-    ScrapeBatch   child for cheap families — N boards (N from BatchSize).
-    ScrapeBoard   child for heavy families — one board.
+Real @workflow.defn. Fail-loud doctrine is encoded in the activity options:
+attempts=1 (Temporal's default is infinite), start_to_close absurd (exists only
+because the SDK requires a value; never meant to fire — the daily Airflow pass
+is the real safety net).
 
-STATUS: SKELETON. The Temporal SDK wiring (@workflow.defn / @workflow.run) is
-added in build-order step 7, only after the offline engine is proven and with
-Michael's explicit go. This file documents the shape; it does not yet import
-temporalio so the package stays importable without the SDK.
+ScrapeBoard  — one board (heavy families, and the smoke-test entrypoint).
+PlatformRun  — parent per platform (fan-out) — added when the DB plan is wired.
 """
 from __future__ import annotations
 
-# from temporalio import workflow   # added in step 7
-#
-# @workflow.defn
-# class PlatformRun:
-#     @workflow.run
-#     async def run(self, platform: str) -> dict:
-#         plan = await workflow.execute_activity(plan_run, platform, ...)
-#         children = [workflow.start_child_workflow(...) for batch in plan.batches]
-#         # fire-and-forget; abandon-on-close; parent finishes with failures RECORDED
-#         return {"platform": platform, "batches": len(plan.batches)}
+from datetime import timedelta
+
+from temporalio import workflow
+from temporalio.common import RetryPolicy
+
+with workflow.unsafe.imports_passed_through():
+    from ingest.orchestration.activities import scrape_board
+
+
+@workflow.defn
+class ScrapeBoard:
+    @workflow.run
+    async def run(self, platform: str, slug: str) -> dict:
+        return await workflow.execute_activity(
+            scrape_board,
+            args=[platform, slug],
+            start_to_close_timeout=timedelta(days=30),        # doctrine: never fires
+            retry_policy=RetryPolicy(maximum_attempts=1),     # doctrine: fail-loud
+        )
