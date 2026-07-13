@@ -45,8 +45,11 @@ class TemporalConfig:
 
     @classmethod
     def from_env(cls) -> "TemporalConfig":
+        # accept TEMPORAL_ADDRESS (cluster convention) or TEMPORAL_TARGET
+        target = (os.environ.get("TEMPORAL_ADDRESS")
+                  or os.environ.get("TEMPORAL_TARGET") or "127.0.0.1:7233")
         return cls(
-            target=os.environ.get("TEMPORAL_TARGET", "127.0.0.1:7233"),
+            target=target,
             namespace=os.environ.get("TEMPORAL_NAMESPACE", "ingest"),
             tls=os.environ.get("TEMPORAL_TLS", "false").lower() == "true",
         )
