@@ -19,7 +19,7 @@ from temporalio.worker import Worker
 
 from ingest.orchestration.config import TemporalConfig
 from ingest.orchestration.activities import scrape_board
-from ingest.orchestration.workflows import ScrapeBoard
+from ingest.orchestration.workflows import ScrapeBoard, PlatformRun
 
 
 async def run_worker(queue: str):
@@ -27,7 +27,7 @@ async def run_worker(queue: str):
     client = await Client.connect(cfg.target, namespace=cfg.namespace)
     print(f"worker up: target={cfg.target} ns={cfg.namespace} queue={queue}")
     worker = Worker(client, task_queue=queue,
-                    workflows=[ScrapeBoard], activities=[scrape_board])
+                    workflows=[ScrapeBoard, PlatformRun], activities=[scrape_board])
     await worker.run()
 
 

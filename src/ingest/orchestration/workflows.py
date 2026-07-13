@@ -12,7 +12,7 @@ import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 
 with workflow.unsafe.imports_passed_through():
     from ingest.orchestration.activities import scrape_board
@@ -43,7 +43,8 @@ class PlatformRun:
         async def one(slug: str):
             return await workflow.execute_child_workflow(
                 ScrapeBoard.run, args=[platform, slug],
-                id=naming.board_scrape(platform, slug, run_date))
+                id=naming.board_scrape(platform, slug, run_date),
+                id_reuse_policy=WorkflowIDReusePolicy.TERMINATE_IF_RUNNING)
 
         results = await asyncio.gather(*[one(s) for s in slugs],
                                        return_exceptions=True)

@@ -13,6 +13,7 @@ import os
 from datetime import date
 
 from temporalio.client import Client
+from temporalio.common import WorkflowIDReusePolicy
 
 from ingest.orchestration.config import TemporalConfig
 from ingest.orchestration import naming
@@ -33,7 +34,8 @@ async def trigger(limit=None, run_date=None):
             continue
         await client.start_workflow(
             PlatformRun.run, args=[p, slugs, run_date],
-            id=naming.platform_run(p, run_date), task_queue="scrape-http")
+            id=naming.platform_run(p, run_date), task_queue="scrape-http",
+            id_reuse_policy=WorkflowIDReusePolicy.TERMINATE_IF_RUNNING)
         print(f"started {naming.platform_run(p, run_date)} ({len(slugs)} boards)")
         started += 1
     print(f"triggered {started} platform runs for {run_date}")

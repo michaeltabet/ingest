@@ -17,15 +17,12 @@ from ingest.core.models import Board
 from ingest.scraping import registry
 from ingest.utils.http import UrllibClient
 
-_CH = None
-
-
 def _clickhouse():
-    global _CH
-    if _CH is None:
-        from ingest.utils.clickhouse import ConnectClickHouse
-        _CH = ConnectClickHouse.from_env()
-    return _CH
+    # fresh client per call — clickhouse-connect sessions can't run concurrent
+    # queries, and activities persist in parallel (asyncio.to_thread). A new
+    # client per write gets its own session; creation is a cheap HTTP handshake.
+    from ingest.utils.clickhouse import ConnectClickHouse
+    return ConnectClickHouse.from_env()
 
 
 def _dt(iso: str) -> datetime:

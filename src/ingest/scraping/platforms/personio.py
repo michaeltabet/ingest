@@ -1,19 +1,19 @@
-"""Personio. Facts ported from atlas-kt PersonioScraper.kt.
+"""Personio. Facts ported from atlas-kt PersonioScraper.kt + verified live.
 
-Career hosts: https://{slug}.jobs.personio.com (international; .de legacy).
-We use the JSON path: GET {base}/search.json → list of positions (no JD body;
-detail JD lives at {base}/job/{id}.json — fetched per job).
+One-shot: GET https://{slug}.jobs.personio.com/search.json returns every
+position WITH its `description` inline — no detail call (the /job/{id}.json
+path 404s; the JD is already in the list response).
 """
 from __future__ import annotations
 
 import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
-from ingest.scraping.families import PagedDetailScraper
+from ingest.scraping.families import OneShotScraper
 from ingest.utils.normalize import digest_json
 
 
-class PersonioScraper(PagedDetailScraper):
+class PersonioScraper(OneShotScraper):
     platform = "personio"
 
     def list_request(self, board: Board, cursor) -> Request:
@@ -22,11 +22,6 @@ class PersonioScraper(PagedDetailScraper):
     def parse_list(self, body: bytes, cursor) -> ListPage:
         data = json.loads(body or b"[]")
         jobs = data if isinstance(data, list) else data.get("positions", [])
-        stubs = [Stub(digest=digest_json({"id": j.get("id")}),
-                      external_id=str(j.get("id")))
+        stubs = [Stub(digest=digest_json({"id": j.get("id")}), external_id=str(j.get("id")))
                  for j in jobs if j.get("id") is not None]
-        return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)  # single page
-
-    def detail_request(self, stub, board: Board) -> Request:
-        return Request("GET",
-            f"https://{board.slug}.jobs.personio.com/job/{stub.external_id}.json")
+        return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)
