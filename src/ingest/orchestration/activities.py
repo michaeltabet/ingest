@@ -55,10 +55,23 @@ def _persist(result, run_id: str):
                "outcome", "errors", "run_at"))
 
 
+def _board_url(platform: str, slug: str) -> str:
+    """Look up the stored board URL (needed by workday/oracle host resolution)."""
+    try:
+        ch = _clickhouse()
+        rows = ch.query(
+            f"SELECT url FROM boards WHERE platform='{platform}' AND slug='{slug}' "
+            f"AND url != '' ORDER BY url DESC LIMIT 1")
+        return rows[0][0] if rows else ""
+    except Exception:
+        return ""
+
+
 @activity.defn
 async def scrape_board(platform: str, slug: str, run_id: str) -> dict:
     scraper = registry.get(platform)
-    board = Board(board_id=f"{platform}:{slug}", platform=platform, slug=slug, url="")
+    url = await asyncio.to_thread(_board_url, platform, slug)
+    board = Board(board_id=f"{platform}:{slug}", platform=platform, slug=slug, url=url)
     ctx = ScrapeContext(http=UrllibClient())
     result = await scraper.fetch(board, ctx)
     # blocking CH insert → thread so the worker loop isn't stalled
