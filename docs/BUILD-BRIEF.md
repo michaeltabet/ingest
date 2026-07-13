@@ -42,6 +42,46 @@ This brief constrains HOW you build what that paper specifies.**
 10. **DO NOT double-scrape.** Every board has ONE owner (atlas-kt | new). Never scrape a
     board the new system doesn't own, except inside a declared parity window.
 
+## 1b. PORTING ≠ TRANSLATING — the DRY/modular contract (read twice)
+
+The single biggest failure mode: opening an atlas-kt scraper (500+ lines of
+Kotlin) and translating it into Python. DO NOT. atlas-kt's structure IS the
+disease (37 copies of stripHtml, 42 of sha256, a retry loop per file). You
+port the **FACTS**, and only the facts:
+
+- the endpoint URLs and HTTP method
+- the pagination shape (offset / page / token / one-shot) → expressed as the
+  CURSOR hook, never as a loop
+- the quirks (page-size degrade on 400, required headers, host variants)
+- where the stubs live in the response and which fields are STABLE for digest
+
+Everything else already exists ONCE in the engine and must not reappear:
+
+| If you find yourself writing… | STOP — it lives in |
+|---|---|
+| a while/for loop over pages | the family (`families.py`) |
+| retry / backoff / sleep | `utils/http.py` |
+| sha256 / digest code | `utils/normalize.py` |
+| HTML stripping / date parsing | `utils/normalize.py` (batch phase) |
+| concurrency (gather/chunks) | the family |
+| writing to ClickHouse | the Step (`orchestration`) |
+| `if platform == "x"` anywhere | nowhere — it's a platform override |
+
+**Mechanical litmus test for every platform file (review-blocker if violated):**
+1. imports: ONLY `core.models`, its family, `utils.normalize.digest_json`, stdlib `json`
+2. contains NO `while`, `sleep`, `hashlib`, `try/except` around HTTP, no client construction
+3. defines ONLY: `platform`, hook methods (`list_request`, `parse_list`,
+   `detail_request?`), and optional constant overrides
+4. size ~15–60 lines. Bigger → either the family is missing a hook (fix the
+   family ONCE, for everyone) or you are translating Kotlin (start over)
+5. has a RECORDED live fixture (see fixtures/PROVENANCE.md) — synthetic = not ported
+
+Worked example — Workday, ~500 lines of Kotlin, becomes ~40 lines of Python:
+retry loop → gone (http.py); detail-chunking → gone (family); stripHtml/sha256
+→ gone (normalize/batch); page-size degrade 200→20 on HTTP 400 → a small
+override of ONE hook; what remains = the cxs URL template, the POST body,
+offset-cursor advance by len(postings), the detail URL join. THAT is the port.
+
 ## 2. The five base abstractions — everything is a subclass of exactly one
 
 | Base | Contract | Subclasses live in |

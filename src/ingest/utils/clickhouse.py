@@ -30,11 +30,22 @@ class NullClickHouse:
 class ConnectClickHouse:
     """Real client over clickhouse-connect (lazy import)."""
 
-    def __init__(self, *, host: str, port: int = 8123, database: str = "scrape",
+    def __init__(self, *, host: str, port: int = 8123, database: str = "ingest",
                  user: str = "default", password: str = ""):
         import clickhouse_connect
         self._c = clickhouse_connect.get_client(
             host=host, port=port, database=database, username=user, password=password)
+
+    @classmethod
+    def from_env(cls) -> "ConnectClickHouse":
+        import os
+        return cls(
+            host=os.environ.get("CH_HOST", "127.0.0.1"),
+            port=int(os.environ.get("CH_PORT", "8123")),
+            database=os.environ.get("CH_DATABASE", "ingest"),
+            user=os.environ.get("CH_USER", "default"),
+            password=os.environ.get("CH_PASSWORD", ""),
+        )
 
     def insert(self, table: str, rows: list, columns: tuple) -> None:
         self._c.insert(table, rows, column_names=list(columns))
