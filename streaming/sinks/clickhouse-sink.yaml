@@ -1,0 +1,10 @@
+# Kafka -> ClickHouse sink for Temporal visibility CDC.
+# Option A (preferred): ClickHouse Kafka table engine + materialized view into
+#   temporal_meta (no extra connector process).
+# Option B: Kafka Connect ClickHouse sink connector.
+# Decided at deploy time (build-order step 7). This file records the contract:
+sink:
+  topic: temporal.visibility.public.executions_visibility
+  target_table: temporal_meta
+  key: workflow_id
+  # temporal_meta is ReplacingMergeTree(workflow_id) → last state wins
