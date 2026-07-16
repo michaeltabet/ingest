@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ingest.core.record import Record
+import ingest.discovery.records  # noqa: F401  (registers the subclasses)
 import ingest.ledger.records  # noqa: F401  (registers the subclasses)
 
 
