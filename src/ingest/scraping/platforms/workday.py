@@ -64,8 +64,12 @@ class WorkdayScraper(PagedDetailScraper):
         # Workday's per-page `total` FLICKERS to 0 on later pages, so stopping on
         # `offset < total` quits early (~60/2000). Paginate until an EMPTY page.
         nxt = offset if postings else None
+        # items_seen counts EVERY posting the page contained; stubs only the
+        # usable ones (externalPath present). Some tenants always carry a few
+        # pathless postings — comparing stubs against `total` made the
+        # completeness gate impossible for them (the 07-15/16 retry storm).
         return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200,
-                        total=int(data.get("total", 0)))
+                        total=int(data.get("total", 0)), items_seen=len(postings))
 
     def detail_request(self, stub, board: Board) -> Request:
         host, tenant, bname = _parts(board)

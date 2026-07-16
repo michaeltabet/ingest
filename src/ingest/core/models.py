@@ -88,6 +88,12 @@ class ListPage:
     raw_body: bytes
     status: int
     total: int = 0
+    items_seen: int = 0   # postings the page CONTAINED, incl. ones the platform
+                          # couldn't turn into stubs (e.g. workday postings with
+                          # no externalPath). 0 = same as len(stubs). The
+                          # completeness gate compares THIS against `total`;
+                          # comparing kept-stubs against total makes the gate
+                          # impossible on boards with even one unusable posting.
 
 
 # --- SILVER: the actual extracted job (this is the objective) ---------------
@@ -134,23 +140,30 @@ class RawResult:
     """
     board_id: str
     platform: str
-    payloads: list = field(default_factory=list)
-    jobs: list = field(default_factory=list)   # SILVER: extracted Job records
+    payloads: list = field(default_factory=list)   # BUFFER — may be flushed+cleared mid-scrape
+    jobs: list = field(default_factory=list)   # SILVER buffer — may be flushed+cleared mid-scrape
     list_status: int = 0
     pages_fetched: int = 0
     stubs_seen: int = 0
+    items_seen: int = 0        # postings seen incl. unusable ones (gate vs reported_total)
     reported_total: int = 0    # what the platform says the board holds (0 = unknown)
     details_ok: int = 0
     details_failed: int = 0
     bytes_in: int = 0
     errors: list = field(default_factory=list)
+    # flush-safe counters: lists above are cleared when a sink flushes them, so
+    # evidence NEVER counts from the buffers.
+    payloads_written: int = 0  # total payloads produced (buffered + flushed)
+    jobs_landed: int = 0       # total jobs landed (buffered + flushed)
+    bytes_buffered: int = 0    # bytes currently sitting in the buffers
 
     @property
     def list_ok(self) -> bool:
         return 200 <= self.list_status < 300
 
     def summary(self) -> dict:
-        """The evidence row (minus raw bodies) — what the ledger records."""
+        """The evidence row (minus raw bodies) — what the ledger records.
+        Counts come from the flush-safe counters, never the buffers."""
         return {
             "board_id": self.board_id,
             "platform": self.platform,
@@ -158,11 +171,12 @@ class RawResult:
             "list_ok": self.list_ok,
             "pages_fetched": self.pages_fetched,
             "stubs_seen": self.stubs_seen,
+            "items_seen": self.items_seen,
             "reported_total": self.reported_total,
-            "jobs_extracted": len(self.jobs),
+            "jobs_extracted": self.jobs_landed,
             "details_ok": self.details_ok,
             "details_failed": self.details_failed,
-            "payloads": len(self.payloads),
+            "payloads": self.payloads_written,
             "bytes_in": self.bytes_in,
             "errors": list(self.errors),
         }

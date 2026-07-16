@@ -32,36 +32,59 @@ def _dt(iso: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
+def _insert_payloads(ch, payloads, run_id: str):
+    # BRONZE — raw bodies, verbatim. Append-only; safe to write per-batch.
+    if not payloads:
+        return
+    rows = [[p.platform, p.board_id, run_id, p.url, p.kind, p.http_status,
+             p.digest, p.stub_digest or "", p.body, _dt(p.fetched_at)]
+            for p in payloads]
+    ch.insert("scrape_raw", rows,
+              ("platform", "board_id", "run_id", "url", "kind", "http_status",
+               "digest", "stub_digest", "body", "fetched_at"))
+
+
+def _insert_jobs(ch, platform: str, board_id: str, jobs, run_id: str,
+                 now: datetime):
+    # LANDED jobs (ELT) — one raw row per job. Idempotent via ReplacingMergeTree.
+    if not jobs:
+        return
+    jrows = [[platform, board_id, j.external_id, j.raw, j.digest, run_id, now]
+             for j in jobs]
+    ch.insert("jobs", jrows,
+              ("platform", "board_id", "external_id", "raw", "digest",
+               "run_id", "fetched_at"))
+    # MEMBERSHIP (jobs_runs) — content-free row per (job, run). ReplacingMergeTree
+    # collapses `jobs` to latest-writer, so a run that died mid-scrape can
+    # overwrite rows from the last GOOD run; membership + the evidence commit
+    # marker let silver read "jobs of the latest SUCCESSFUL run" exactly.
+    mrows = [[platform, board_id, j.external_id, run_id, now] for j in jobs]
+    ch.insert("jobs_runs", mrows,
+              ("platform", "board_id", "external_id", "run_id", "fetched_at"))
+
+
 def _persist(result, run_id: str):
+    """Final flush + evidence + gate. The evidence row is the COMMIT MARKER:
+    written last, only after every batch landed. Batches from a run whose
+    evidence says failure (or never landed) are invisible to silver, which
+    gates on evidence.outcome='success'."""
     ch = _clickhouse()
     now = datetime.now(timezone.utc)
 
-    # BRONZE — raw bodies, verbatim.
-    if result.payloads:
-        rows = [[p.platform, p.board_id, run_id, p.url, p.kind, p.http_status,
-                 p.digest, p.stub_digest or "", p.body, _dt(p.fetched_at)]
-                for p in result.payloads]
-        ch.insert("scrape_raw", rows,
-                  ("platform", "board_id", "run_id", "url", "kind", "http_status",
-                   "digest", "stub_digest", "body", "fetched_at"))
-
-    # LANDED jobs (ELT) — one raw row per job. Idempotent via ReplacingMergeTree.
-    if result.jobs:
-        jrows = [[result.platform, result.board_id, j.external_id, j.raw, j.digest,
-                  run_id, now]
-                 for j in result.jobs]
-        ch.insert("jobs", jrows,
-                  ("platform", "board_id", "external_id", "raw", "digest",
-                   "run_id", "fetched_at"))
+    _insert_payloads(ch, result.payloads, run_id)
+    _insert_jobs(ch, result.platform, result.board_id, result.jobs, run_id, now)
 
     # QUALITY GATE — NO FAKE PASS. A board succeeds only if it fetched the list,
-    # saw jobs, and EXTRACTED every one of them (count in == count out), with no
+    # saw jobs, and EXTRACTED every usable one (count in == count out), with no
     # failed detail fetches. Anything less is a failure, recorded and raised.
     s = result.summary()
     extracted = s["jobs_extracted"]
-    # COMPLETENESS: if the board reports a total, we must have seen ALL of it —
-    # pagination that stopped short (e.g. workday 60/2000) is a FAILURE, not a pass.
-    complete = (s["reported_total"] == 0) or (s["stubs_seen"] == s["reported_total"])
+    # COMPLETENESS: if the board reports a total, we must have SEEN all of it —
+    # pagination that stopped short (e.g. workday 60/2000) is a FAILURE. Seen is
+    # items_seen (every posting the pages contained), NOT stubs_seen: platforms
+    # drop unusable postings (workday: no externalPath) and comparing kept-stubs
+    # to total made the gate impossible on those boards (07-15/16 retry storm).
+    complete = (s["reported_total"] == 0) or (s["items_seen"] >= s["reported_total"])
     ok = (s["list_ok"] and s["stubs_seen"] > 0
           and extracted == s["stubs_seen"] and s["details_failed"] == 0
           and complete)
@@ -79,8 +102,9 @@ def _persist(result, run_id: str):
     if not ok:
         raise RuntimeError(
             f"quality gate FAILED for {s['board_id']}: "
-            f"list_ok={s['list_ok']} stubs_seen={s['stubs_seen']}/"
-            f"{s['reported_total'] or '?'} jobs_extracted={extracted} "
+            f"list_ok={s['list_ok']} items_seen={s['items_seen']}/"
+            f"{s['reported_total'] or '?'} stubs_seen={s['stubs_seen']} "
+            f"jobs_extracted={extracted} "
             f"details_failed={s['details_failed']} complete={complete}")
 
 
@@ -101,8 +125,21 @@ async def scrape_board(platform: str, slug: str, run_id: str) -> dict:
     scraper = registry.get(platform)
     url = await asyncio.to_thread(_board_url, platform, slug)
     board = Board(board_id=f"{platform}:{slug}", platform=platform, slug=slug, url=url)
-    ctx = ScrapeContext(http=UrllibClient())
+
+    def _flush_batch(payloads, jobs):
+        # fresh client per flush (sessions can't run concurrent queries)
+        ch = _clickhouse()
+        _insert_payloads(ch, payloads, run_id)
+        _insert_jobs(ch, platform, board.board_id, jobs, run_id,
+                     datetime.now(timezone.utc))
+
+    async def sink(payloads, jobs):
+        # blocking CH insert → thread so the worker loop isn't stalled
+        await asyncio.to_thread(_flush_batch, payloads, jobs)
+
+    # sink = STREAMING: the family flushes fat batches mid-scrape, so a big
+    # board's memory is bounded by the flush threshold, not its catalog size.
+    ctx = ScrapeContext(http=UrllibClient(), sink=sink)
     result = await scraper.fetch(board, ctx)
-    # blocking CH insert → thread so the worker loop isn't stalled
     await asyncio.to_thread(_persist, result, run_id)
     return result.summary()

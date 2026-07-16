@@ -1,6 +1,6 @@
 """Temporal workflows — DETERMINISTIC (decisions only, no IO, no clocks).
 
-ScrapeBoard  — one board. Fail-loud: attempts=1, absurd start_to_close, no
+ScrapeBoard  — one board. Fail-loud: attempts=1, 30m start_to_close, no
                heartbeat (the daily pass is the dead-worker detector).
 PlatformRun  — parent per platform. FANS OUT children CONCURRENTLY (not a
                loop): starts all boards at once, gathers results. The worker
@@ -20,11 +20,15 @@ with workflow.unsafe.imports_passed_through():
     from ingest.orchestration import naming
 
 _FAIL_LOUD = dict(
-    # DOCTRINE (Michael): no timeouts, no retry cap. A board keeps retrying
-    # until it lands ALL its jobs. Not-all-jobs = the quality gate raises =
-    # Temporal retries = try again. Forever, until it's complete.
-    start_to_close_timeout=timedelta(days=30),          # never fires; SDK requires a value
-    retry_policy=RetryPolicy(maximum_attempts=0),       # 0 = UNLIMITED. no cap. keep retrying, ever.
+    # DOCTRINE (Michael, re-affirmed 2026-07-16): ONE attempt, fail LOUD.
+    # A failed board = a red workflow + an evidence row; the daily pass is the
+    # retry mechanism AND the dead-worker detector. Unlimited retries (07-15)
+    # created a permanent retry population that ate the worker slots and
+    # re-OOMed pods on boards whose gate could never pass.
+    # start_to_close also bounds the no-heartbeat case: a worker OOM-killed
+    # mid-scrape surfaces as a red board within 30 minutes, not 30 days.
+    start_to_close_timeout=timedelta(minutes=30),
+    retry_policy=RetryPolicy(maximum_attempts=1),
 )
 
 

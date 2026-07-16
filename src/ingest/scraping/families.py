@@ -35,6 +35,11 @@ def _payload(board: Board, kind: str, url: str, resp: Response,
                       stub_digest=stub_digest)
 
 
+FLUSH_BYTES = 48 * 1024 * 1024   # flush buffers at ~48MB: bounds peak RAM per
+FLUSH_JOBS = 500                 # activity AND keeps CH inserts fat (HDD node
+                                 # hates many small inserts). Peak ≈ 2x this.
+
+
 class _HttpFamily(Scraper):
     """The common denominator for every HTTP scraper: the page-walk and the
     job-landing. Subclasses supply platform FACTS and say what happens per page.
@@ -55,6 +60,24 @@ class _HttpFamily(Scraper):
     @staticmethod
     def _land(res: RawResult, external_id: str, raw: str, digest: str) -> None:
         res.jobs.append(Job(external_id=external_id or "", raw=raw, digest=digest))
+        res.jobs_landed += 1
+        res.bytes_buffered += len(raw)
+
+    # --- streaming: hand full buffers to the sink so RAM stays bounded -------
+    @staticmethod
+    async def _maybe_flush(res: RawResult, ctx: ScrapeContext) -> None:
+        """If a sink is injected and the buffers are fat enough, hand them off
+        and clear them. Counters (jobs_landed, payloads_written, bytes_in, ...)
+        survive — evidence and the gate never depend on the buffers. Without a
+        sink (tests, offline repair) behavior is exactly the old buffer-all."""
+        if ctx.sink is None:
+            return
+        if res.bytes_buffered < FLUSH_BYTES and len(res.jobs) < FLUSH_JOBS:
+            return
+        payloads, jobs = res.payloads, res.jobs
+        res.payloads, res.jobs = [], []
+        res.bytes_buffered = 0
+        await ctx.sink(payloads, jobs)
 
     def _land_stubs(self, res: RawResult, stubs: list) -> None:
         for s in stubs:
@@ -74,14 +97,19 @@ class _HttpFamily(Scraper):
                 res.list_status = resp.status
             res.pages_fetched += 1
             res.bytes_in += len(resp.body)
+            res.bytes_buffered += len(resp.body)
             res.payloads.append(_payload(board, "list", req.url, resp))
+            res.payloads_written += 1
             if not resp.ok:
                 break
             page = self.parse_list(resp.body, cursor)
             res.stubs_seen += len(page.stubs)
+            res.items_seen += page.items_seen or len(page.stubs)
             if page.total:
-                res.reported_total = page.total   # board's own count of all jobs
+                # totals can differ page-to-page (workday's flickers) — keep the max
+                res.reported_total = max(res.reported_total, page.total)
             await on_page(page)
+            await self._maybe_flush(res, ctx)
             if not page.stubs or page.next_cursor is None:   # empty/last page = done
                 break
             cursor = page.next_cursor
@@ -113,7 +141,9 @@ class PagedDetailScraper(ListScraper):
     Oracle, ...). Reuses the page-walk; the only addition is following each
     fresh stub to its detail body, which IS the job."""
     family = "paged_detail"
-    detail_concurrency = 10000   # no cap — fetch ALL details at once, go fast
+    detail_concurrency = 64   # per-page cap; was 10000 ("no cap") — a latent
+                              # socket bomb the day a pooled client replaces
+                              # urllib's thread ceiling. 64 saturates a page.
 
     @abstractmethod
     def detail_request(self, stub, board: Board) -> Request: ...
@@ -131,8 +161,10 @@ class PagedDetailScraper(ListScraper):
             res.bytes_in += len(resp.body)
             if resp.ok:
                 res.details_ok += 1
+                res.bytes_buffered += len(resp.body)
                 res.payloads.append(_payload(board, "detail", req.url, resp,
                                              stub_digest=stub.digest))
+                res.payloads_written += 1
                 # the DETAIL body IS the job — land it raw.
                 self._land(res, stub.external_id or "",
                            resp.body.decode("utf-8", "replace"), stub.digest)

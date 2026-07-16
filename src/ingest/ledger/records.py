@@ -77,6 +77,36 @@ class JobRecord(Record):
     }
 
 
+class JobRunRecord(Record):
+    """MEMBERSHIP: which jobs a given run saw. Content-free, append-only.
+
+    Needed because `jobs` is a ReplacingMergeTree: a run that dies mid-scrape
+    (batches now stream out via the sink) can overwrite rows from the last
+    good run before failing its gate. Silver therefore reads:
+        evidence (outcome='success', latest per board)  → the committed run_id
+        jobs_runs (that run_id)                          → its job set
+        jobs                                             → the content
+    The evidence row is the COMMIT MARKER — written last, after all batches.
+    TTL keeps this small: membership older than 30 days has no reader (silver
+    only ever wants the latest successful run per board)."""
+    __table__ = "jobs_runs"
+    __engine__ = "MergeTree"
+    __partition_by__ = "toYYYYMMDD(fetched_at)"
+    __order_by__ = ("platform", "board_id", "run_id", "external_id")
+    __columns__ = {
+        "platform": "LowCardinality(String)",
+        "board_id": "String",
+        "external_id": "String",
+        "run_id": "String",
+        "fetched_at": "DateTime64(3)",
+    }
+
+    @classmethod
+    def ddl(cls) -> str:
+        base = super().ddl()
+        return base[:-1] + "\nTTL toDateTime(fetched_at) + INTERVAL 30 DAY;"
+
+
 class GateResultRecord(Record):
     """Every gate evaluation — gates are data. 'Did the gates run?' is
     itself checkable."""

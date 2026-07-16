@@ -16,3 +16,8 @@ class ScrapeContext:
     known_digests: set = field(default_factory=set)   # seen-set for dedup
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("ingest"))
     browser: object | None = None      # only browser-family scrapers use this
+    sink: object | None = None         # async (payloads, jobs) -> None; the family
+                                       # flushes buffered raw/jobs through this
+                                       # mid-scrape so a big board never holds its
+                                       # whole catalog in RAM. None = buffer all
+                                       # (tests, offline repair).
