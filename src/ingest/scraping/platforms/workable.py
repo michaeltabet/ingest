@@ -10,7 +10,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import OneShotScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, raw_json
 
 
 class WorkableScraper(OneShotScraper):
@@ -24,5 +24,6 @@ class WorkableScraper(OneShotScraper):
         data = json.loads(body or b"{}")
         jobs = data.get("jobs") or data.get("results") or []   # fallback preserved
         stubs = [Stub(digest=digest_json({"s": j.get("shortcode") or j.get("id")}),
-                      external_id=str(j.get("shortcode") or j.get("id"))) for j in jobs]
+                      external_id=str(j.get("shortcode") or j.get("id")), raw=raw_json(j))
+                 for j in jobs]
         return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)

@@ -22,12 +22,14 @@ from ingest.scraping import registry
 from ingest.boards import source
 
 
-async def trigger(limit=None, run_date=None):
+async def trigger(limit=None, run_date=None, platforms=None):
+    """platforms: None = all (the nightly run); a list = only those (janitor
+    refire). Same IDs either way — TERMINATE_IF_RUNNING replaces, by design."""
     cfg = TemporalConfig.from_env()
     client = await Client.connect(cfg.target, namespace=cfg.namespace)
     run_date = run_date or date.today().isoformat()
     started = 0
-    for p in registry.all_platforms():
+    for p in (platforms or registry.all_platforms()):
         slugs = source.boards_for(p, limit=limit)
         if not slugs:
             print(f"skip {p}: no boards")
@@ -43,7 +45,9 @@ async def trigger(limit=None, run_date=None):
 
 def main():
     limit = int(os.environ["BOARDS_LIMIT"]) if os.environ.get("BOARDS_LIMIT") else None
-    asyncio.run(trigger(limit=limit))
+    # RUN_DATE: the scheduler's run window (Airflow's logical date), not
+    # date.today(). Unset = today, for a hand-run trigger.
+    asyncio.run(trigger(limit=limit, run_date=os.environ.get("RUN_DATE") or None))
 
 
 if __name__ == "__main__":

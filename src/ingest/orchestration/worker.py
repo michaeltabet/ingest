@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -24,10 +25,14 @@ from ingest.orchestration.workflows import ScrapeBoard, PlatformRun
 
 async def run_worker(queue: str):
     cfg = TemporalConfig.from_env()
+    # concurrency: scrapes are I/O-bound (waiting on the network), so one pod
+    # runs many at once. WORKER_SLOTS = max concurrent scrape activities.
+    slots = int(os.environ.get("WORKER_SLOTS", "200"))
     client = await Client.connect(cfg.target, namespace=cfg.namespace)
-    print(f"worker up: target={cfg.target} ns={cfg.namespace} queue={queue}")
+    print(f"worker up: target={cfg.target} ns={cfg.namespace} queue={queue} slots={slots}")
     worker = Worker(client, task_queue=queue,
-                    workflows=[ScrapeBoard, PlatformRun], activities=[scrape_board])
+                    workflows=[ScrapeBoard, PlatformRun], activities=[scrape_board],
+                    max_concurrent_activities=slots)
     await worker.run()
 
 

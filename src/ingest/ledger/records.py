@@ -43,6 +43,7 @@ class EvidenceRecord(Record):
         "list_status": "UInt16",
         "pages_fetched": "UInt32",
         "stubs_seen": "UInt32",
+        "jobs_extracted": "UInt32",
         "details_ok": "UInt32",
         "details_failed": "UInt32",
         "payloads": "UInt32",
@@ -50,6 +51,29 @@ class EvidenceRecord(Record):
         "outcome": "LowCardinality(String)",   # success | partial | failure
         "errors": "Array(String)",
         "run_at": "DateTime64(3)",
+    }
+
+
+class JobRecord(Record):
+    """LANDED jobs (ELT). One row per job, raw JSON verbatim — NOT parsed.
+    Field extraction is a downstream transform over `raw`.
+
+    ReplacingMergeTree keyed on (platform, board_id, external_id) with
+    fetched_at as the version → a rerun REPLACES the same job, never dupes.
+    Idempotent by construction: run the flow twice, same rows.
+    """
+    __table__ = "jobs"
+    __engine__ = "ReplacingMergeTree(fetched_at)"
+    __partition_by__ = "platform"
+    __order_by__ = ("platform", "board_id", "external_id")
+    __columns__ = {
+        "platform": "LowCardinality(String)",
+        "board_id": "String",
+        "external_id": "String",
+        "raw": "String",                       # the single job's JSON, verbatim
+        "digest": "String",
+        "run_id": "String",
+        "fetched_at": "DateTime64(3)",
     }
 
 

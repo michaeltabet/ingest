@@ -9,7 +9,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import OneShotScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, raw_json
 
 
 class RecruiteeScraper(OneShotScraper):
@@ -21,5 +21,5 @@ class RecruiteeScraper(OneShotScraper):
     def parse_list(self, body: bytes, cursor) -> ListPage:
         offers = json.loads(body or b"{}").get("offers", [])
         stubs = [Stub(digest=digest_json({"id": o.get("id"), "u": o.get("updated_at")}),
-                      external_id=str(o.get("id"))) for o in offers]
+                      external_id=str(o.get("id")), raw=raw_json(o)) for o in offers]
         return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)

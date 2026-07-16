@@ -10,7 +10,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import OneShotScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, raw_json
 
 
 class TeamtailorScraper(OneShotScraper):
@@ -22,5 +22,5 @@ class TeamtailorScraper(OneShotScraper):
     def parse_list(self, body: bytes, cursor) -> ListPage:
         items = json.loads(body or b"{}").get("items", [])
         stubs = [Stub(digest=digest_json({"id": j.get("id"), "d": j.get("date_published")}),
-                      external_id=str(j.get("id"))) for j in items]
+                      external_id=str(j.get("id")), raw=raw_json(j)) for j in items]
         return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)

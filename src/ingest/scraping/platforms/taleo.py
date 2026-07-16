@@ -17,7 +17,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import PagedScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, raw_json
 
 
 class TaleoScraper(PagedScraper):
@@ -37,11 +37,12 @@ class TaleoScraper(PagedScraper):
 
     def parse_list(self, body: bytes, cursor) -> ListPage:
         data = json.loads(body or b"{}")
-        reqs = data.get("requisitionList", [])
+        reqs = data.get("requisitionList") or []
         stubs = [Stub(digest=digest_json({"c": r.get("contestNo") or r.get("jobId")}),
-                      external_id=str(r.get("contestNo") or r.get("jobId")))
+                      external_id=str(r.get("contestNo") or r.get("jobId")), raw=raw_json(r))
                  for r in reqs]
         total = (data.get("pagingData") or {}).get("totalCount", 0)
         page = cursor or 1
         nxt = page + 1 if reqs and page * max(len(reqs), 1) < total else None
-        return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200)
+        return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200,
+                        total=int(total or 0))

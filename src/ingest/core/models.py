@@ -61,19 +61,51 @@ class Stub:
 
     `digest` MUST be computed over STABLE fields only. A session id or
     timestamp inside a stub silently kills dedup (every stub looks new).
+
+    `raw` carries this one job's JSON when the LIST already contains it
+    (one_shot/paged families) — the family lands it directly. For paged+detail
+    families the job body arrives later from the detail fetch, so `raw` stays
+    empty here and the family lands the detail body instead.
     """
     digest: str
     detail_url: str | None = None
     external_id: str | None = None
+    raw: str = ""
 
 
 @dataclass
 class ListPage:
-    """What a platform's parse_list returns for one fetched page."""
+    """What a platform's parse_list returns for one fetched page.
+
+    `total` = the job count the platform REPORTS for the whole board (e.g.
+    workday `total`, oracle `TotalJobsCount`, taleo `pagingData.totalCount`).
+    0 = not reported (one-shot lists are complete by definition). The gate
+    fails a board whose stubs_seen != a reported total — i.e. pagination that
+    didn't get ALL the jobs.
+    """
     stubs: list
     next_cursor: object | None
     raw_body: bytes
     status: int
+    total: int = 0
+
+
+# --- SILVER: the actual extracted job (this is the objective) ---------------
+
+@dataclass
+class Job:
+    """One job, LANDED not parsed (ELT). We explode a response into one row per
+    job and store that job's raw JSON verbatim. Field extraction (title,
+    company, salary, ...) is a later transform over `raw` — NOT done here.
+
+    external_id = the platform's own id (for dedup / idempotent rerun).
+    raw         = that single job's JSON, as-is.
+    digest      = stable hash for ReplacingMergeTree (rerun replaces, no dupes).
+    platform/board_id are stamped at persist time from the Board.
+    """
+    external_id: str
+    raw: str
+    digest: str
 
 
 # --- outputs (evidence-carrying) --------------------------------------------
@@ -103,9 +135,11 @@ class RawResult:
     board_id: str
     platform: str
     payloads: list = field(default_factory=list)
+    jobs: list = field(default_factory=list)   # SILVER: extracted Job records
     list_status: int = 0
     pages_fetched: int = 0
     stubs_seen: int = 0
+    reported_total: int = 0    # what the platform says the board holds (0 = unknown)
     details_ok: int = 0
     details_failed: int = 0
     bytes_in: int = 0
@@ -124,6 +158,8 @@ class RawResult:
             "list_ok": self.list_ok,
             "pages_fetched": self.pages_fetched,
             "stubs_seen": self.stubs_seen,
+            "reported_total": self.reported_total,
+            "jobs_extracted": len(self.jobs),
             "details_ok": self.details_ok,
             "details_failed": self.details_failed,
             "payloads": len(self.payloads),

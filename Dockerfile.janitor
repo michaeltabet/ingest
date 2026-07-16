@@ -1,0 +1,18 @@
+# janitor triage image — the ingest package + Claude Code CLI + git.
+# Runs `janitor triage`: a headless Sonnet agent that categorizes last
+# night's failures, refires transients, and opens MRs (never merges).
+# Separate from the worker image so scrape pods never carry agent tooling.
+ARG BASE=registry.tail05f41d.ts.net/CHANGE-ME/ingest:pinned
+FROM ${BASE}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code native installer (no node needed); token comes from env at
+# runtime (CLAUDE_CODE_OAUTH_TOKEN via secret/ingest-janitor), never baked.
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/root/.local/bin:${PATH}"
+
+ENTRYPOINT ["python", "-u", "-m", "ingest.orchestration.janitor"]
+CMD ["triage"]

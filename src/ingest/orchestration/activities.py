@@ -34,6 +34,9 @@ def _dt(iso: str) -> datetime:
 
 def _persist(result, run_id: str):
     ch = _clickhouse()
+    now = datetime.now(timezone.utc)
+
+    # BRONZE — raw bodies, verbatim.
     if result.payloads:
         rows = [[p.platform, p.board_id, run_id, p.url, p.kind, p.http_status,
                  p.digest, p.stub_digest or "", p.body, _dt(p.fetched_at)]
@@ -41,18 +44,44 @@ def _persist(result, run_id: str):
         ch.insert("scrape_raw", rows,
                   ("platform", "board_id", "run_id", "url", "kind", "http_status",
                    "digest", "stub_digest", "body", "fetched_at"))
+
+    # LANDED jobs (ELT) — one raw row per job. Idempotent via ReplacingMergeTree.
+    if result.jobs:
+        jrows = [[result.platform, result.board_id, j.external_id, j.raw, j.digest,
+                  run_id, now]
+                 for j in result.jobs]
+        ch.insert("jobs", jrows,
+                  ("platform", "board_id", "external_id", "raw", "digest",
+                   "run_id", "fetched_at"))
+
+    # QUALITY GATE — NO FAKE PASS. A board succeeds only if it fetched the list,
+    # saw jobs, and EXTRACTED every one of them (count in == count out), with no
+    # failed detail fetches. Anything less is a failure, recorded and raised.
     s = result.summary()
-    # BINARY — no partial. A board either fully succeeded or it failed.
-    outcome = ("success"
-               if s["list_ok"] and s["stubs_seen"] > 0 and s["details_failed"] == 0
-               else "failure")
+    extracted = s["jobs_extracted"]
+    # COMPLETENESS: if the board reports a total, we must have seen ALL of it —
+    # pagination that stopped short (e.g. workday 60/2000) is a FAILURE, not a pass.
+    complete = (s["reported_total"] == 0) or (s["stubs_seen"] == s["reported_total"])
+    ok = (s["list_ok"] and s["stubs_seen"] > 0
+          and extracted == s["stubs_seen"] and s["details_failed"] == 0
+          and complete)
+    outcome = "success" if ok else "failure"
+
     ch.insert("scrape_evidence",
               [[run_id, s["platform"], s["board_id"], s["list_status"], s["pages_fetched"],
-                s["stubs_seen"], s["details_ok"], s["details_failed"], s["payloads"],
-                s["bytes_in"], outcome, s["errors"], datetime.now(timezone.utc)]],
+                s["stubs_seen"], extracted, s["details_ok"], s["details_failed"],
+                s["payloads"], s["bytes_in"], outcome, s["errors"], now]],
               ("run_id", "platform", "board_id", "list_status", "pages_fetched",
-               "stubs_seen", "details_ok", "details_failed", "payloads", "bytes_in",
-               "outcome", "errors", "run_at"))
+               "stubs_seen", "jobs_extracted", "details_ok", "details_failed",
+               "payloads", "bytes_in", "outcome", "errors", "run_at"))
+
+    # Fail LOUD: the workflow goes red so a broken board surfaces, never hides.
+    if not ok:
+        raise RuntimeError(
+            f"quality gate FAILED for {s['board_id']}: "
+            f"list_ok={s['list_ok']} stubs_seen={s['stubs_seen']}/"
+            f"{s['reported_total'] or '?'} jobs_extracted={extracted} "
+            f"details_failed={s['details_failed']} complete={complete}")
 
 
 def _board_url(platform: str, slug: str) -> str:

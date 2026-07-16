@@ -1,20 +1,27 @@
-"""The scraping families — THE LOOPS, each written exactly once.
+"""The scraping families — factored to the common denominator.
 
-A family implements Scraper.fetch(). A platform subclass supplies FACTS via
-the hooks (list_request, parse_list, and for paged+detail, detail_request).
-Fix a loop here → every platform in that family heals. This is the atlas-kt
-'42-file edit' collapsed to one.
+Hierarchy, most-common → most-specific:
 
-Incremental extraction lives in PagedDetail: details are fetched only for
-stubs whose digest is NOT in ctx.known_digests (the seen-set, passed in).
+    Scraper                     contract: fetch() -> RawResult
+      _HttpFamily               HTTP hooks (list_request, parse_list) + the
+                                page-walk (_walk) + job landing (_land)   ← COMMON
+        ListScraper             land jobs straight from the list           ← shape A
+          PagedDetailScraper    + follow each stub to a detail body        ← shape B
+        BrowserScraper          render first (reserved)                    ← shape C
+
+Only TWO real HTTP shapes: the job is either IN the list (ListScraper — covers
+one-shot as a single page AND paged, same loop) or BEHIND a detail fetch
+(PagedDetailScraper). A platform is just FACTS (which URL, how to read it);
+"where the raw comes from" is the only thing a shape adds. Fix the loop here →
+every platform in that shape heals.
 """
 from __future__ import annotations
 
 import asyncio
 from abc import abstractmethod
 
-from ingest.core.models import (Board, ListPage, RawPayload, RawResult, Request,
-                                Response, now_iso)
+from ingest.core.models import (Board, Job, ListPage, RawPayload, RawResult,
+                                Request, Response, now_iso)
 from ingest.core.scraper import Scraper
 from ingest.core.context import ScrapeContext
 from ingest.utils.normalize import sha256_hex
@@ -29,40 +36,36 @@ def _payload(board: Board, kind: str, url: str, resp: Response,
 
 
 class _HttpFamily(Scraper):
-    """Shared hooks for all HTTP families. Not a public family itself."""
+    """The common denominator for every HTTP scraper: the page-walk and the
+    job-landing. Subclasses supply platform FACTS and say what happens per page.
+    """
 
     @abstractmethod
     def list_request(self, board: Board, cursor) -> Request: ...
 
     @abstractmethod
     def parse_list(self, body: bytes, cursor) -> ListPage:
-        """Peek (navigation, not parsing): return stubs + next cursor."""
+        """Peek (navigation, not parsing): return stubs + next cursor.
 
+        A list-shape platform attaches each job's raw JSON to its Stub (Stub.raw);
+        a detail-shape platform leaves raw empty and the body arrives via detail.
+        """
 
-class OneShotScraper(_HttpFamily):
-    """Family 1: one call returns everything (Greenhouse, Lever)."""
-    family = "one_shot"
+    # --- landing a job (ELT, no parse) — written ONCE, used by every shape ---
+    @staticmethod
+    def _land(res: RawResult, external_id: str, raw: str, digest: str) -> None:
+        res.jobs.append(Job(external_id=external_id or "", raw=raw, digest=digest))
 
-    async def fetch(self, board, ctx: ScrapeContext) -> RawResult:
-        res = RawResult(board_id=board.board_id, platform=board.platform)
-        req = self.list_request(board, None)
-        resp = await ctx.http.send(req)
-        res.list_status = resp.status
-        res.pages_fetched = 1
-        res.bytes_in += len(resp.body)
-        res.payloads.append(_payload(board, "list", req.url, resp))
-        if resp.ok:
-            page = self.parse_list(resp.body, None)
-            res.stubs_seen = len(page.stubs)
-        return res
+    def _land_stubs(self, res: RawResult, stubs: list) -> None:
+        for s in stubs:
+            if s.raw:
+                self._land(res, s.external_id, s.raw, s.digest)
 
-
-class PagedScraper(_HttpFamily):
-    """Family 2: walk pages, each page already complete."""
-    family = "paged"
-
-    async def fetch(self, board, ctx: ScrapeContext) -> RawResult:
-        res = RawResult(board_id=board.board_id, platform=board.platform)
+    # --- the page-walk — written ONCE. one-shot is just a single-page walk. ---
+    async def _walk(self, board, ctx: ScrapeContext, res: RawResult, on_page) -> None:
+        """Walk list pages until exhausted, invoking `on_page(page)` for each.
+        Handles status, byte accounting, raw list payloads, stub counting, and
+        cursor advance — the parts every shape shares."""
         cursor = None
         while True:
             req = self.list_request(board, cursor)
@@ -76,74 +79,85 @@ class PagedScraper(_HttpFamily):
                 break
             page = self.parse_list(resp.body, cursor)
             res.stubs_seen += len(page.stubs)
-            if not page.stubs or page.next_cursor is None:  # empty page = done
+            if page.total:
+                res.reported_total = page.total   # board's own count of all jobs
+            await on_page(page)
+            if not page.stubs or page.next_cursor is None:   # empty/last page = done
                 break
             cursor = page.next_cursor
+
+
+class ListScraper(_HttpFamily):
+    """Shape A: the job is IN the list. Covers one-shot (single page, cursor
+    always None) and paged (multi-page) with the SAME loop."""
+    family = "list"
+
+    async def fetch(self, board, ctx: ScrapeContext) -> RawResult:
+        res = RawResult(board_id=board.board_id, platform=board.platform)
+
+        async def on_page(page):
+            self._land_stubs(res, page.stubs)
+
+        await self._walk(board, ctx, res, on_page)
         return res
 
 
-class PagedDetailScraper(_HttpFamily):
-    """Family 3: pages of stubs, then a per-job detail fetch (Workday, iCIMS).
+# Back-compat aliases: platforms still declare their intent (one-shot vs paged),
+# but both are the same loop now. No platform file needs to change.
+OneShotScraper = ListScraper
+PagedScraper = ListScraper
 
-    Incremental: skip a stub whose digest is already in ctx.known_digests.
-    detail_concurrency is a Hypothesis default (calibrated), overridable per
-    platform.
-    """
+
+class PagedDetailScraper(ListScraper):
+    """Shape B: pages of stubs, then a per-job DETAIL fetch (Workday, iCIMS,
+    Oracle, ...). Reuses the page-walk; the only addition is following each
+    fresh stub to its detail body, which IS the job."""
     family = "paged_detail"
-    detail_concurrency = 10   # hypothesis; calibrated from the ledger
+    detail_concurrency = 10000   # no cap — fetch ALL details at once, go fast
 
     @abstractmethod
     def detail_request(self, stub, board: Board) -> Request: ...
 
-    async def _fetch_detail(self, stub, board, ctx, res_lock, res):
+    async def _fetch_detail(self, stub, board, ctx, lock, res):
         req = self.detail_request(stub, board)
         try:
             resp = await ctx.http.send(req)
         except Exception as exc:                     # logged-and-skipped, never abort
-            async with res_lock:
+            async with lock:
                 res.details_failed += 1
                 res.errors.append(f"detail {stub.external_id}: {exc}")
             return
-        async with res_lock:
+        async with lock:
             res.bytes_in += len(resp.body)
             if resp.ok:
                 res.details_ok += 1
                 res.payloads.append(_payload(board, "detail", req.url, resp,
                                              stub_digest=stub.digest))
+                # the DETAIL body IS the job — land it raw.
+                self._land(res, stub.external_id or "",
+                           resp.body.decode("utf-8", "replace"), stub.digest)
             else:
                 res.details_failed += 1
 
     async def fetch(self, board, ctx: ScrapeContext) -> RawResult:
         res = RawResult(board_id=board.board_id, platform=board.platform)
         lock = asyncio.Lock()
-        cursor = None
-        while True:
-            req = self.list_request(board, cursor)
-            resp = await ctx.http.send(req)
-            if res.list_status == 0:
-                res.list_status = resp.status
-            res.pages_fetched += 1
-            res.bytes_in += len(resp.body)
-            res.payloads.append(_payload(board, "list", req.url, resp))
-            if not resp.ok:
-                break
-            page = self.parse_list(resp.body, cursor)
+
+        async def on_page(page):
+            # incremental: only fetch details for stubs we haven't seen before
             fresh = [s for s in page.stubs if s.digest not in ctx.known_digests]
-            res.stubs_seen += len(page.stubs)
             for i in range(0, len(fresh), self.detail_concurrency):
                 chunk = fresh[i:i + self.detail_concurrency]
                 await asyncio.gather(*[
                     self._fetch_detail(s, board, ctx, lock, res) for s in chunk])
-            if not page.stubs or page.next_cursor is None:
-                break
-            cursor = page.next_cursor
+
+        await self._walk(board, ctx, res, on_page)
         return res
 
 
 class BrowserScraper(Scraper):
-    """Family 5: JS-built page; needs a rendered browser (Paradox).
-    Reserved — runs on the scrape-browser queue. Implemented when the first
-    browser platform is ported."""
+    """Shape C: JS-built page; needs a rendered browser (Paradox). Reserved —
+    runs on the scrape-browser queue. Same _land contract once implemented."""
     family = "browser"
 
     async def fetch(self, board, ctx: ScrapeContext) -> RawResult:

@@ -25,6 +25,12 @@ def digest_json(obj) -> str:
     return sha256_hex(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode())
 
 
+def raw_json(obj) -> str:
+    """One job's JSON, verbatim, for LANDING into `jobs` (ELT, no parse).
+    Compact + unicode-preserving. One home so every platform lands identically."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
 def strip_html(html: str) -> str:
     """Batch-phase util (job descriptions). One implementation, not 37."""
     clean = _SCRIPT.sub("", html)

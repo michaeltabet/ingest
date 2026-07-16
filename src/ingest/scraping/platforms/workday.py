@@ -61,8 +61,11 @@ class WorkdayScraper(PagedDetailScraper):
                       detail_url=j.get("externalPath"))
                  for j in postings if j.get("externalPath")]
         offset = (cursor or 0) + len(postings)
-        nxt = offset if postings and offset < data.get("total", 0) else None
-        return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200)
+        # Workday's per-page `total` FLICKERS to 0 on later pages, so stopping on
+        # `offset < total` quits early (~60/2000). Paginate until an EMPTY page.
+        nxt = offset if postings else None
+        return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200,
+                        total=int(data.get("total", 0)))
 
     def detail_request(self, stub, board: Board) -> Request:
         host, tenant, bname = _parts(board)

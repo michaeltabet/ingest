@@ -52,7 +52,8 @@ class OracleScraper(PagedDetailScraper):
                  for r in reqs if r.get("Id")]
         offset = (cursor or 0) + len(reqs)
         nxt = offset if reqs and offset < total else None
-        return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200)
+        return ListPage(stubs=stubs, next_cursor=nxt, raw_body=body, status=200,
+                        total=int(total or 0))
 
     def detail_request(self, stub, board: Board) -> Request:
         base, site = _parts(board)

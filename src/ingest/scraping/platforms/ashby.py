@@ -8,7 +8,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import OneShotScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, raw_json
 
 
 class AshbyScraper(OneShotScraper):
@@ -20,5 +20,5 @@ class AshbyScraper(OneShotScraper):
     def parse_list(self, body: bytes, cursor) -> ListPage:
         jobs = json.loads(body or b"{}").get("jobs", [])
         stubs = [Stub(digest=digest_json({"id": j.get("id"), "p": j.get("publishedDate")}),
-                      external_id=str(j.get("id"))) for j in jobs]
+                      external_id=str(j.get("id")), raw=raw_json(j)) for j in jobs]
         return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)

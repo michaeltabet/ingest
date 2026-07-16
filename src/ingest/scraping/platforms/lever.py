@@ -9,7 +9,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import OneShotScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, raw_json
 
 
 class LeverScraper(OneShotScraper):
@@ -22,5 +22,5 @@ class LeverScraper(OneShotScraper):
         data = json.loads(body or b"[]")
         jobs = data if isinstance(data, list) else []
         stubs = [Stub(digest=digest_json({"id": j.get("id"), "t": j.get("updatedAt")}),
-                      external_id=str(j.get("id"))) for j in jobs]
+                      external_id=str(j.get("id")), raw=raw_json(j)) for j in jobs]
         return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)
