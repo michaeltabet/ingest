@@ -10,4 +10,4 @@ gl.token
 .DS_Store
 dist/
 build/
-clickhouse/migrations/*.sql
+clickhouse/migrations/001_initial.sql

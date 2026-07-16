@@ -1,6 +1,6 @@
 """janitor_daily — the morning judgment over last night's ingest run.
 
-02:00 ingest_daily fires the PlatformRuns. Boards retry FOREVER by doctrine,
+02:00 ingest_daily fires the PlatformRuns. Boards get ONE attempt by doctrine,
 so a run that can't finish never fails on its own — at 06:00 this DAG closes
 the window: terminate whatever is still open, then hand judgment to a
 time-boxed (1h) Claude agent on Sonnet that categorizes each platform's

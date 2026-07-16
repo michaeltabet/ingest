@@ -44,8 +44,9 @@ class FixtureClient:
 class UrllibClient:
     """Real HTTP over the stdlib (urllib) — zero dependencies. Blocking work is
     pushed to a thread so it satisfies the async `send` contract. Used by the
-    recorder and offline `--dry` runs so they work with no pip installs; the
-    production workers use HttpxClient for real concurrency.
+    recorder and offline `--dry` runs so they work with no pip installs. It is
+    also the FALLBACK when httpx is absent — but its thread-pool ceiling cannot
+    meet the activity time budget for big boards; production installs httpx.
     """
 
     def __init__(self, *, timeout: float = 30.0, default_headers: dict | None = None):

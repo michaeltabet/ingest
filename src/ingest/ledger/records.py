@@ -43,12 +43,15 @@ class EvidenceRecord(Record):
         "list_status": "UInt16",
         "pages_fetched": "UInt32",
         "stubs_seen": "UInt32",
+        "items_seen": "UInt32",       # every posting the pages contained
+        "dupes_seen": "UInt32",       # stubs served twice (pagination shifted)
+        "reported_total": "UInt32",   # the board's own claim; gate input
         "jobs_extracted": "UInt32",
         "details_ok": "UInt32",
         "details_failed": "UInt32",
         "payloads": "UInt32",
         "bytes_in": "UInt64",
-        "outcome": "LowCardinality(String)",   # success | partial | failure
+        "outcome": "LowCardinality(String)",   # success | empty | failure
         "errors": "Array(String)",
         "run_at": "DateTime64(3)",
     }

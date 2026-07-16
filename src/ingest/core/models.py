@@ -144,8 +144,9 @@ class RawResult:
     jobs: list = field(default_factory=list)   # SILVER buffer — may be flushed+cleared mid-scrape
     list_status: int = 0
     pages_fetched: int = 0
-    stubs_seen: int = 0
+    stubs_seen: int = 0        # UNIQUE usable stubs (deduped in-run by _walk)
     items_seen: int = 0        # postings seen incl. unusable ones (gate vs reported_total)
+    dupes_seen: int = 0        # stubs served more than once (pagination shifted)
     reported_total: int = 0    # what the platform says the board holds (0 = unknown)
     details_ok: int = 0
     details_failed: int = 0
@@ -172,6 +173,7 @@ class RawResult:
             "pages_fetched": self.pages_fetched,
             "stubs_seen": self.stubs_seen,
             "items_seen": self.items_seen,
+            "dupes_seen": self.dupes_seen,
             "reported_total": self.reported_total,
             "jobs_extracted": self.jobs_landed,
             "details_ok": self.details_ok,

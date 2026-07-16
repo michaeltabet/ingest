@@ -17,6 +17,19 @@ from ingest.core.models import Board
 from ingest.scraping import registry
 from ingest.utils.http import UrllibClient
 
+
+def _http_client():
+    """Async httpx in production — 20 details in flight are 20 sockets, not 20
+    threads. The threaded urllib fallback (no pip installs; recorder/--dry) can
+    NOT meet the 45m activity budget for big boards when 16 activities share
+    one ~32-thread default executor (measured: 10K details alone 26.5m, under
+    contention 141m+)."""
+    try:
+        from ingest.utils.http import HttpxClient
+        return HttpxClient()
+    except ImportError:
+        return UrllibClient()
+
 def _clickhouse():
     # fresh client per call — clickhouse-connect sessions can't run concurrent
     # queries, and activities persist in parallel (asyncio.to_thread). A new
@@ -84,25 +97,36 @@ def _persist(result, run_id: str):
     # items_seen (every posting the pages contained), NOT stubs_seen: platforms
     # drop unusable postings (workday: no externalPath) and comparing kept-stubs
     # to total made the gate impossible on those boards (07-15/16 retry storm).
-    complete = (s["reported_total"] == 0) or (s["items_seen"] >= s["reported_total"])
+    # Dupes SUBTRACT: a stub served twice means pagination shifted under us and
+    # something else was skipped — dup-inflated pages must not count as coverage.
+    complete = (s["reported_total"] == 0) or (
+        s["items_seen"] - s["dupes_seen"] >= s["reported_total"])
+    empty = (s["list_ok"] and s["items_seen"] == 0 and s["reported_total"] == 0
+             and s["details_failed"] == 0)
     ok = (s["list_ok"] and s["stubs_seen"] > 0
           and extracted == s["stubs_seen"] and s["details_failed"] == 0
           and complete)
-    outcome = "success" if ok else "failure"
+    # An employer with genuinely zero openings is NOT a failure — recording it
+    # as one would put a permanent false alarm in the fail-loud channel.
+    outcome = "success" if ok else ("empty" if empty else "failure")
 
     ch.insert("scrape_evidence",
               [[run_id, s["platform"], s["board_id"], s["list_status"], s["pages_fetched"],
-                s["stubs_seen"], extracted, s["details_ok"], s["details_failed"],
+                s["stubs_seen"], s["items_seen"], s["dupes_seen"], s["reported_total"],
+                extracted, s["details_ok"], s["details_failed"],
                 s["payloads"], s["bytes_in"], outcome, s["errors"], now]],
               ("run_id", "platform", "board_id", "list_status", "pages_fetched",
-               "stubs_seen", "jobs_extracted", "details_ok", "details_failed",
+               "stubs_seen", "items_seen", "dupes_seen", "reported_total",
+               "jobs_extracted", "details_ok", "details_failed",
                "payloads", "bytes_in", "outcome", "errors", "run_at"))
 
     # Fail LOUD: the workflow goes red so a broken board surfaces, never hides.
-    if not ok:
+    # ("empty" completes quietly — zero openings is a fact, not a fault.)
+    if not ok and not empty:
         raise RuntimeError(
             f"quality gate FAILED for {s['board_id']}: "
-            f"list_ok={s['list_ok']} items_seen={s['items_seen']}/"
+            f"list_ok={s['list_ok']} items_seen={s['items_seen']}"
+            f"(-{s['dupes_seen']} dupes)/"
             f"{s['reported_total'] or '?'} stubs_seen={s['stubs_seen']} "
             f"jobs_extracted={extracted} "
             f"details_failed={s['details_failed']} complete={complete}")
@@ -139,7 +163,11 @@ async def scrape_board(platform: str, slug: str, run_id: str) -> dict:
 
     # sink = STREAMING: the family flushes fat batches mid-scrape, so a big
     # board's memory is bounded by the flush threshold, not its catalog size.
-    ctx = ScrapeContext(http=UrllibClient(), sink=sink)
-    result = await scraper.fetch(board, ctx)
+    http = _http_client()
+    ctx = ScrapeContext(http=http, sink=sink)
+    try:
+        result = await scraper.fetch(board, ctx)
+    finally:
+        await http.aclose()
     await asyncio.to_thread(_persist, result, run_id)
     return result.summary()

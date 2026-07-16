@@ -26,8 +26,11 @@ _FAIL_LOUD = dict(
     # created a permanent retry population that ate the worker slots and
     # re-OOMed pods on boards whose gate could never pass.
     # start_to_close also bounds the no-heartbeat case: a worker OOM-killed
-    # mid-scrape surfaces as a red board within 30 minutes, not 30 days.
-    start_to_close_timeout=timedelta(minutes=30),
+    # mid-scrape surfaces as a red board within 45 minutes, not 30 days.
+    # 45m is sized for a 10K-detail workday tenant on the async client
+    # (~24 min measured in simulation) with margin; NOT for the threaded
+    # urllib fallback, which cannot meet it under contention.
+    start_to_close_timeout=timedelta(minutes=45),
     retry_policy=RetryPolicy(maximum_attempts=1),
 )
 
@@ -36,7 +39,12 @@ _FAIL_LOUD = dict(
 class ScrapeBoard:
     @workflow.run
     async def run(self, platform: str, slug: str) -> dict:
-        run_id = workflow.info().workflow_id
+        # run_id must be UNIQUE PER EXECUTION, not per day: the workflow_id is
+        # date-scoped and a same-day refire (janitor TERMINATE_IF_RUNNING)
+        # reuses it — batches from the dead attempt would then share the
+        # successful attempt's run_id and pollute its jobs_runs membership.
+        info = workflow.info()
+        run_id = f"{info.workflow_id}/{info.run_id}"
         return await workflow.execute_activity(
             scrape_board, args=[platform, slug, run_id], **_FAIL_LOUD)
 

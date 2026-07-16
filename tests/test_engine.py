@@ -30,6 +30,8 @@ def check(name, cond):
     print(f"  {'PASS' if cond else 'FAIL'}  {name}")
     if not cond:
         FAILED.append(name)
+    # under pytest, print-and-collect is invisible — a FAIL must fail the test
+    assert cond, name
 
 
 # --- a throwaway one-shot platform, defined in-test -------------------------
@@ -93,9 +95,15 @@ async def test_paged_detail_with_dedup():
     # seen-set already contains /a → only /b should be detail-fetched
     seen = {digest_json({"p": "/a"})}
     res = await _Workish().fetch(board, ScrapeContext(http=http, known_digests=seen))
-    check("paged_detail stubs_seen==2", res.stubs_seen == 2)
+    # stubs_seen counts fresh-unique stubs only (known/_walk-deduped ones are
+    # excluded) so jobs_extracted == stubs_seen holds under dedup — the gate
+    # arithmetic stays consistent. items_seen still counts everything served.
+    check("paged_detail stubs_seen==1 (fresh only; /a known)", res.stubs_seen == 1)
+    check("paged_detail items_seen==2 (everything served)", res.items_seen == 2)
     check("paged_detail details_ok==1 (dedup skipped /a)", res.details_ok == 1)
     check("paged_detail payloads==2 (1 list + 1 detail)", len(res.payloads) == 2)
+    check("paged_detail extracted==stubs_seen under dedup",
+          res.jobs_landed == res.stubs_seen)
 
 
 async def test_streaming_sink():

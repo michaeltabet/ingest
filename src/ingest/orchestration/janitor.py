@@ -1,7 +1,7 @@
 """Daily janitor — closes the nightly window and hands judgment to an agent.
 
-Doctrine is fail loud, handle daily: boards retry FOREVER inside Temporal
-(workflows.py, maximum_attempts=0), so a broken board never fails red on its
+Doctrine is fail loud, handle daily: boards get ONE attempt (workflows.py,
+maximum_attempts=1) and a failed board goes red with an evidence row on its
 own — something must close the window every morning. This is it.
 
     stop            terminate every run still open from the previous window

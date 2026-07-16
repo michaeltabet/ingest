@@ -35,9 +35,13 @@ def _payload(board: Board, kind: str, url: str, resp: Response,
                       stub_digest=stub_digest)
 
 
-FLUSH_BYTES = 48 * 1024 * 1024   # flush buffers at ~48MB: bounds peak RAM per
+FLUSH_BYTES = 16 * 1024 * 1024   # flush buffers at ~16MB: bounds peak RAM per
 FLUSH_JOBS = 500                 # activity AND keeps CH inserts fat (HDD node
-                                 # hates many small inserts). Peak ≈ 2x this.
+                                 # hates many small inserts). Measured flush-
+                                 # moment footprint ≈ threshold + ~2.5x insert
+                                 # transient; at 16 slots x 2Gi that must stay
+                                 # under ~120Mi/slot — 48MB blew it when flushes
+                                 # correlated (startup herds).
 
 
 class _HttpFamily(Scraper):
@@ -90,6 +94,12 @@ class _HttpFamily(Scraper):
         Handles status, byte accounting, raw list payloads, stub counting, and
         cursor advance — the parts every shape shares."""
         cursor = None
+        # in-run seen-set, seeded with the caller's known digests: a digest
+        # served twice (pagination shifting under a mutating board) is counted
+        # as a DUPE and dropped, so it is never landed or detail-fetched twice
+        # — and dupes_seen feeds the completeness gate (dup-inflated pages are
+        # evidence the walk missed something, not extra coverage).
+        seen = set(ctx.known_digests)
         while True:
             req = self.list_request(board, cursor)
             resp = await ctx.http.send(req)
@@ -103,14 +113,18 @@ class _HttpFamily(Scraper):
             if not resp.ok:
                 break
             page = self.parse_list(resp.body, cursor)
-            res.stubs_seen += len(page.stubs)
             res.items_seen += page.items_seen or len(page.stubs)
+            raw_stub_count = len(page.stubs)
+            page.stubs = [s for s in page.stubs if s.digest not in seen]
+            seen.update(s.digest for s in page.stubs)
+            res.dupes_seen += raw_stub_count - len(page.stubs)
+            res.stubs_seen += len(page.stubs)
             if page.total:
                 # totals can differ page-to-page (workday's flickers) — keep the max
                 res.reported_total = max(res.reported_total, page.total)
             await on_page(page)
             await self._maybe_flush(res, ctx)
-            if not page.stubs or page.next_cursor is None:   # empty/last page = done
+            if not raw_stub_count or page.next_cursor is None:   # empty/last page = done
                 break
             cursor = page.next_cursor
 
@@ -176,10 +190,10 @@ class PagedDetailScraper(ListScraper):
         lock = asyncio.Lock()
 
         async def on_page(page):
-            # incremental: only fetch details for stubs we haven't seen before
-            fresh = [s for s in page.stubs if s.digest not in ctx.known_digests]
-            for i in range(0, len(fresh), self.detail_concurrency):
-                chunk = fresh[i:i + self.detail_concurrency]
+            # page.stubs arrive already deduped by _walk (in-run seen-set,
+            # seeded with ctx.known_digests) — every stub here is fresh.
+            for i in range(0, len(page.stubs), self.detail_concurrency):
+                chunk = page.stubs[i:i + self.detail_concurrency]
                 await asyncio.gather(*[
                     self._fetch_detail(s, board, ctx, lock, res) for s in chunk])
 
