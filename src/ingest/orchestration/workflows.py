@@ -1,7 +1,9 @@
 """Temporal workflows — DETERMINISTIC (decisions only, no IO, no clocks).
 
-ScrapeBoard  — one board. Fail-loud: attempts=1, 30m start_to_close, no
-               heartbeat (the daily pass is the dead-worker detector).
+ScrapeBoard  — one board. Fail-loud: attempts=1, no ceiling on a board's
+               runtime, no heartbeat (the daily pass is the dead-worker
+               detector). The numbers come from config.ACTIVITY_OPTIONS —
+               ONE home; this file must never restate them.
 PlatformRun  — parent per platform. FANS OUT children CONCURRENTLY (not a
                loop): starts all boards at once, gathers results. The worker
                pool's slot count is the real throughput bound.
@@ -18,6 +20,7 @@ from temporalio.exceptions import ApplicationError
 with workflow.unsafe.imports_passed_through():
     from ingest.orchestration.activities import scrape_board
     from ingest.orchestration import naming
+    from ingest.orchestration.config import ACTIVITY_OPTIONS
 
 _FAIL_LOUD = dict(
     # DOCTRINE (Michael, re-affirmed 2026-07-16): ONE attempt, fail LOUD.
@@ -26,12 +29,12 @@ _FAIL_LOUD = dict(
     # created a permanent retry population that ate the worker slots and
     # re-OOMed pods on boards whose gate could never pass.
     # No ceiling on a board: a board takes as long as it takes. The SDK
-    # requires start_to_close to exist, so it is set absurdly high rather
-    # than to a number that would kill a slow-but-working scrape — matching
-    # ACTIVITY_OPTIONS in config.py. The daily pass is the dead-worker
-    # detector; a hung worker surfaces there, not via a timeout here.
-    start_to_close_timeout=timedelta(days=30),
-    retry_policy=RetryPolicy(maximum_attempts=1),
+    # requires start_to_close to exist, so config.ACTIVITY_OPTIONS sets it
+    # absurdly high rather than to a number that would kill a slow-but-working
+    # scrape. DERIVED, not restated: this dict and config.py diverged three
+    # ways once (30m docstring / 45m code / 30d config) — never again.
+    start_to_close_timeout=timedelta(seconds=ACTIVITY_OPTIONS["start_to_close_seconds"]),
+    retry_policy=RetryPolicy(maximum_attempts=ACTIVITY_OPTIONS["maximum_attempts"]),
 )
 
 

@@ -14,7 +14,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import PagedDetailScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import MIN_JD_CHARS, digest_json
 
 
 class BamboohrScraper(PagedDetailScraper):
@@ -32,3 +32,11 @@ class BamboohrScraper(PagedDetailScraper):
     def detail_request(self, stub, board: Board) -> Request:
         return Request("GET",
             f"https://{board.slug}.bamboohr.com/careers/{stub.external_id}/detail")
+
+    def jd_present(self, raw: str) -> bool:
+        try:
+            d = json.loads(raw or "{}")
+        except Exception:
+            return True
+        jo = (d.get("result") or {}).get("jobOpening") or {}
+        return len(str(jo.get("description", "")).strip()) > MIN_JD_CHARS

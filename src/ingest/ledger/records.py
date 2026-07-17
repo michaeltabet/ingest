@@ -49,6 +49,8 @@ class EvidenceRecord(Record):
         "jobs_extracted": "UInt32",
         "details_ok": "UInt32",
         "details_failed": "UInt32",
+        "details_gone": "UInt32",     # detail 404/410 — churn, not fault
+        "jobs_no_jd": "UInt32",       # landed jobs with no description (fake-pass input)
         "payloads": "UInt32",
         "bytes_in": "UInt64",
         "outcome": "LowCardinality(String)",   # success | empty | failure

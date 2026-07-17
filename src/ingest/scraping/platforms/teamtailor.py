@@ -10,7 +10,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import OneShotScraper
-from ingest.utils.normalize import digest_json, raw_json
+from ingest.utils.normalize import MIN_JD_CHARS, digest_json, raw_json
 
 
 class TeamtailorScraper(OneShotScraper):
@@ -24,3 +24,10 @@ class TeamtailorScraper(OneShotScraper):
         stubs = [Stub(digest=digest_json({"id": j.get("id"), "d": j.get("date_published")}),
                       external_id=str(j.get("id")), raw=raw_json(j)) for j in items]
         return ListPage(stubs=stubs, next_cursor=None, raw_body=body, status=200)
+
+    def jd_present(self, raw: str) -> bool:
+        try:
+            d = json.loads(raw or "{}")
+        except Exception:
+            return True
+        return len(str(d.get("content_html", "")).strip()) > MIN_JD_CHARS

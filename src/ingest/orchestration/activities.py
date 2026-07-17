@@ -103,33 +103,61 @@ def _persist(result, run_id: str):
         s["items_seen"] - s["dupes_seen"] >= s["reported_total"])
     empty = (s["list_ok"] and s["items_seen"] == 0 and s["reported_total"] == 0
              and s["details_failed"] == 0)
+    # Jobs pulled mid-run (detail 404/410) are NOT missing data — they stopped
+    # existing. They must count toward coverage or details_failed==0 becomes
+    # unreachable on any large live board: cliffordchance landed 153/154 and was
+    # thrown away over one deleted posting (07-17). Real faults (5xx/timeout)
+    # still redden the board — this narrows the gate, it does not soften it.
+    accounted = extracted + s["details_gone"]
+    # NO FAKE PASS ON CONTENT: a board that landed jobs but EVERY one of them
+    # carries no job description is not a success — it is the exact failure that
+    # let smartrecruiters/icims/personio show green with 0 usable JDs for weeks
+    # (07-17). One JD-less job is churn; a whole board of them is broken.
+    jd_ok = (extracted == 0) or (s["jobs_no_jd"] < extracted)
     ok = (s["list_ok"] and s["stubs_seen"] > 0
-          and extracted == s["stubs_seen"] and s["details_failed"] == 0
-          and complete)
+          and accounted == s["stubs_seen"] and s["details_failed"] == 0
+          and complete and jd_ok)
     # An employer with genuinely zero openings is NOT a failure — recording it
     # as one would put a permanent false alarm in the fail-loud channel.
     outcome = "success" if ok else ("empty" if empty else "failure")
+
+    # The gate's verdict must land IN the evidence row, not only in the raised
+    # exception. Without this a gate failure stores errors=[] and the row says
+    # "failure" with no reason — the ledger is the debugging surface, and it was
+    # blank for every gate failure (329 unexplainable rows on 07-17).
+    errors = list(s["errors"])
+    if not ok and not empty:
+        errors.append(_gate_reason(s, extracted, complete))
 
     ch.insert("scrape_evidence",
               [[run_id, s["platform"], s["board_id"], s["list_status"], s["pages_fetched"],
                 s["stubs_seen"], s["items_seen"], s["dupes_seen"], s["reported_total"],
                 extracted, s["details_ok"], s["details_failed"],
-                s["payloads"], s["bytes_in"], outcome, s["errors"], now]],
+                s["details_gone"], s["jobs_no_jd"],
+                s["payloads"], s["bytes_in"], outcome, errors, now]],
               ("run_id", "platform", "board_id", "list_status", "pages_fetched",
                "stubs_seen", "items_seen", "dupes_seen", "reported_total",
                "jobs_extracted", "details_ok", "details_failed",
+               "details_gone", "jobs_no_jd",
                "payloads", "bytes_in", "outcome", "errors", "run_at"))
 
     # Fail LOUD: the workflow goes red so a broken board surfaces, never hides.
     # ("empty" completes quietly — zero openings is a fact, not a fault.)
     if not ok and not empty:
-        raise RuntimeError(
-            f"quality gate FAILED for {s['board_id']}: "
+        raise RuntimeError(_gate_reason(s, extracted, complete))
+
+
+def _gate_reason(s: dict, extracted: int, complete: bool) -> str:
+    """Why the gate rejected this board. ONE source of truth for the wording:
+    the evidence row and the raised error must never disagree."""
+    return (f"quality gate FAILED for {s['board_id']}: "
             f"list_ok={s['list_ok']} items_seen={s['items_seen']}"
             f"(-{s['dupes_seen']} dupes)/"
             f"{s['reported_total'] or '?'} stubs_seen={s['stubs_seen']} "
             f"jobs_extracted={extracted} "
-            f"details_failed={s['details_failed']} complete={complete}")
+            f"details_failed={s['details_failed']} "
+            f"details_gone={s['details_gone']} "
+            f"jobs_no_jd={s['jobs_no_jd']} complete={complete}")
 
 
 def _board_url(platform: str, slug: str) -> str:

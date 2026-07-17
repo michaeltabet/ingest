@@ -40,3 +40,28 @@ def strip_html(html: str) -> str:
     for ent, ch in _ENTITIES.items():
         clean = clean.replace(ent, ch)
     return clean
+
+
+# The floor below which a "description" is a placeholder, not a JD. ONE home —
+# every platform jd_present() and the JSON-LD helper use this, never a literal.
+MIN_JD_CHARS = 30
+
+_LDJSON = re.compile(
+    r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', re.I | re.S)
+
+
+def ldjson_description_nonempty(raw: str) -> bool:
+    """True if the page embeds a schema.org JobPosting whose `description` has
+    real content. Used by scrapers that land the job PAGE (icims, personio) to
+    tell a real JD from an empty shell. Parse failure → True: don't block on a
+    detector bug, silver still sees the raw. One home for both platforms."""
+    for block in _LDJSON.findall(raw or ""):
+        try:
+            obj = json.loads(block.strip())
+        except Exception:
+            return True
+        items = obj if isinstance(obj, list) else [obj]
+        for it in items:
+            if isinstance(it, dict) and len(str(it.get("description", "")).strip()) > MIN_JD_CHARS:
+                return True
+    return False
