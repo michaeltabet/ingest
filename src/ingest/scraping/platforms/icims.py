@@ -14,7 +14,7 @@ import re
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import PagedDetailScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import digest_json, ldjson_description_nonempty
 
 _LOC = re.compile(r"<loc>\s*(https?://[^<]*/jobs/(\d+)/[^<]*/job/?)\s*</loc>", re.I)
 
@@ -34,3 +34,8 @@ class IcimsScraper(PagedDetailScraper):
     def detail_request(self, stub, board: Board) -> Request:
         sep = "&" if "?" in stub.detail_url else "?"
         return Request("GET", f"{stub.detail_url}{sep}in_iframe=1")
+
+    def jd_present(self, raw: str) -> bool:
+        # the iframe HTML embeds a schema.org JobPosting; empty description
+        # (blocked/placeholder page) = no JD = fail loud, never fake-green.
+        return ldjson_description_nonempty(raw)

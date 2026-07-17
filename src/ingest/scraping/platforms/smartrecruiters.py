@@ -13,7 +13,7 @@ import json
 
 from ingest.core.models import Board, ListPage, Request, Stub
 from ingest.scraping.families import PagedDetailScraper
-from ingest.utils.normalize import digest_json
+from ingest.utils.normalize import MIN_JD_CHARS, digest_json
 
 PAGE = 100
 
@@ -41,3 +41,11 @@ class SmartrecruitersScraper(PagedDetailScraper):
     def detail_request(self, stub, board: Board) -> Request:
         return Request("GET",
             f"https://api.smartrecruiters.com/v1/companies/{board.slug}/postings/{stub.external_id}")
+
+    def jd_present(self, raw: str) -> bool:
+        try:
+            d = json.loads(raw or "{}")
+        except Exception:
+            return True
+        secs = (d.get("jobAd") or {}).get("sections") or {}
+        return len(str((secs.get("jobDescription") or {}).get("text", "")).strip()) > MIN_JD_CHARS

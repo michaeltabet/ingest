@@ -149,13 +149,16 @@ class RawResult:
     dupes_seen: int = 0        # stubs served more than once (pagination shifted)
     reported_total: int = 0    # what the platform says the board holds (0 = unknown)
     details_ok: int = 0
-    details_failed: int = 0
+    details_failed: int = 0    # detail fetch BROKE (5xx/timeout) — a real fault
+    details_gone: int = 0      # detail 404/410 — job pulled mid-run; churn, not fault
     bytes_in: int = 0
     errors: list = field(default_factory=list)
     # flush-safe counters: lists above are cleared when a sink flushes them, so
     # evidence NEVER counts from the buffers.
     payloads_written: int = 0  # total payloads produced (buffered + flushed)
     jobs_landed: int = 0       # total jobs landed (buffered + flushed)
+    jobs_no_jd: int = 0        # landed jobs whose body carries NO description —
+                               # a green board full of these is a fake pass
     bytes_buffered: int = 0    # bytes currently sitting in the buffers
 
     @property
@@ -178,6 +181,8 @@ class RawResult:
             "jobs_extracted": self.jobs_landed,
             "details_ok": self.details_ok,
             "details_failed": self.details_failed,
+            "details_gone": self.details_gone,
+            "jobs_no_jd": self.jobs_no_jd,
             "payloads": self.payloads_written,
             "bytes_in": self.bytes_in,
             "errors": list(self.errors),

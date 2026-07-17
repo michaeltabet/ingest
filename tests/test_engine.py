@@ -200,12 +200,67 @@ def test_ddl_generates():
     check("scrape_raw present", any(t.__table__ == "scrape_raw" for t in tables))
 
 
+async def test_churn_details_gone():
+    # a job deleted between the list fetch and its detail fetch (404) is CHURN:
+    # counted in details_gone, NOT details_failed — one deleted posting must
+    # never redden a board that extracted everything else (cliffordchance
+    # 153/154, 07-17). The gate's arithmetic is extracted + gone == stubs.
+    listing = _resp({"jobPostings": [{"path": "/a"}, {"path": "/b"}], "total": 2})
+    http = FixtureClient([
+        (lambda m, u: u.endswith("/jobs"), listing),
+        (lambda m, u: u.endswith("/a"), _resp({"jd": "x"})),
+        (lambda m, u: u.endswith("/b"), _resp({}, status=404)),
+    ])
+    board = Board(board_id="b1", platform="workish", slug="acme", url="")
+    res = await _Workish().fetch(board, ScrapeContext(http=http))
+    check("churn: details_gone==1", res.details_gone == 1)
+    check("churn: details_failed==0 (404 is churn, not fault)",
+          res.details_failed == 0)
+    check("churn: extracted+gone==stubs (gate arithmetic)",
+          res.jobs_landed + res.details_gone == res.stubs_seen)
+
+
+async def test_jd_presence_counts():
+    # jd_present is a PLATFORM fact. A board where some jobs lack a JD is fine
+    # (churny listings); a board where ALL landed jobs lack one is the 07-17
+    # fake-pass (smartrecruiters/personio green with zero usable JDs) and the
+    # counters must make that signature unmistakable: jobs_no_jd == extracted.
+    class _JdAware(_Workish):
+        platform = "jdish"
+
+        def jd_present(self, raw):
+            return bool(json.loads(raw or "{}").get("jd"))
+
+    listing = _resp({"jobPostings": [{"path": "/a"}, {"path": "/b"}], "total": 2})
+    board = Board(board_id="b1", platform="jdish", slug="acme", url="")
+
+    http = FixtureClient([
+        (lambda m, u: u.endswith("/jobs"), listing),
+        (lambda m, u: u.endswith("/a"), _resp({"jd": "real text"})),
+        (lambda m, u: u.endswith("/b"), _resp({"jd": ""})),      # empty shell
+    ])
+    res = await _JdAware().fetch(board, ScrapeContext(http=http))
+    check("jd: one empty of two counted", res.jobs_no_jd == 1)
+    check("jd: partial-empty passes (jobs_no_jd < extracted)",
+          res.jobs_no_jd < res.jobs_landed)
+
+    http = FixtureClient([
+        (lambda m, u: u.endswith("/jobs"), listing),
+        (lambda m, u: u.endswith("/a") or u.endswith("/b"), _resp({"jd": ""})),
+    ])
+    res = await _JdAware().fetch(board, ScrapeContext(http=http))
+    check("jd: all-empty board carries the fake-pass signature "
+          "(jobs_no_jd == extracted)", res.jobs_no_jd == res.jobs_landed)
+
+
 def main():
     print("engine tests:")
     asyncio.run(test_oneshot())
     asyncio.run(test_paged_detail_with_dedup())
     asyncio.run(test_streaming_sink())
     asyncio.run(test_gate_items_seen_vs_total())
+    asyncio.run(test_churn_details_gone())
+    asyncio.run(test_jd_presence_counts())
     test_registry_coverage()
     test_ddl_generates()
     print(f"\n{'ALL PASS' if not FAILED else 'FAILURES: ' + ', '.join(FAILED)}")

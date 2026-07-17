@@ -60,9 +60,19 @@ class _HttpFamily(Scraper):
         a detail-shape platform leaves raw empty and the body arrives via detail.
         """
 
+    # Does this landed body carry a job description? The scraper is the ONE
+    # Python home for a platform's shape, so the presence check lives here next
+    # to list_request/parse_list — not duplicated into the gate. Default True:
+    # an un-overridden platform is not blocked (it can still be caught in
+    # silver). Platforms whose JD location is known override this so a body with
+    # an EMPTY description is counted and, if a whole board is empty, fails loud.
+    def jd_present(self, raw: str) -> bool:
+        return True
+
     # --- landing a job (ELT, no parse) — written ONCE, used by every shape ---
-    @staticmethod
-    def _land(res: RawResult, external_id: str, raw: str, digest: str) -> None:
+    def _land(self, res: RawResult, external_id: str, raw: str, digest: str) -> None:
+        if not self.jd_present(raw):
+            res.jobs_no_jd += 1
         res.jobs.append(Job(external_id=external_id or "", raw=raw, digest=digest))
         res.jobs_landed += 1
         res.bytes_buffered += len(raw)
@@ -155,9 +165,12 @@ class PagedDetailScraper(ListScraper):
     Oracle, ...). Reuses the page-walk; the only addition is following each
     fresh stub to its detail body, which IS the job."""
     family = "paged_detail"
-    detail_concurrency = 64   # per-page cap; was 10000 ("no cap") — a latent
+    detail_concurrency = 50   # per-page cap; was 10000 ("no cap") — a latent
                               # socket bomb the day a pooled client replaces
-                              # urllib's thread ceiling. 64 saturates a page.
+                              # urllib's thread ceiling. 50 = the Hypothesis
+                              # physics bound (calibration.DetailConcurrency
+                              # hi=50); the weekly calibrate DAG tunes DOWN
+                              # from here, never above it.
 
     @abstractmethod
     def detail_request(self, stub, board: Board) -> Request: ...
@@ -182,8 +195,17 @@ class PagedDetailScraper(ListScraper):
                 # the DETAIL body IS the job — land it raw.
                 self._land(res, stub.external_id or "",
                            resp.body.decode("utf-8", "replace"), stub.digest)
+            elif resp.status in (404, 410):
+                # The job was pulled between the list fetch and this detail
+                # fetch. That is CHURN, not a scrape fault — a live board with
+                # 15k postings always loses a few mid-run. Counting it as a
+                # failure made details_failed==0 unreachable, so the gate threw
+                # away boards that had extracted 99.9% of their jobs.
+                res.details_gone += 1
             else:
                 res.details_failed += 1
+                res.errors.append(
+                    f"detail {stub.external_id}: HTTP {resp.status}")
 
     async def fetch(self, board, ctx: ScrapeContext) -> RawResult:
         res = RawResult(board_id=board.board_id, platform=board.platform)
