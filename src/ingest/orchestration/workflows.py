@@ -25,12 +25,12 @@ _FAIL_LOUD = dict(
     # retry mechanism AND the dead-worker detector. Unlimited retries (07-15)
     # created a permanent retry population that ate the worker slots and
     # re-OOMed pods on boards whose gate could never pass.
-    # start_to_close also bounds the no-heartbeat case: a worker OOM-killed
-    # mid-scrape surfaces as a red board within 45 minutes, not 30 days.
-    # 45m is sized for a 10K-detail workday tenant on the async client
-    # (~24 min measured in simulation) with margin; NOT for the threaded
-    # urllib fallback, which cannot meet it under contention.
-    start_to_close_timeout=timedelta(minutes=45),
+    # No ceiling on a board: a board takes as long as it takes. The SDK
+    # requires start_to_close to exist, so it is set absurdly high rather
+    # than to a number that would kill a slow-but-working scrape — matching
+    # ACTIVITY_OPTIONS in config.py. The daily pass is the dead-worker
+    # detector; a hung worker surfaces there, not via a timeout here.
+    start_to_close_timeout=timedelta(days=30),
     retry_policy=RetryPolicy(maximum_attempts=1),
 )
 
