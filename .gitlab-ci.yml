@@ -1,0 +1,23 @@
+stages: [build]
+
+# Builds the ingest worker image and pushes it tagged with the commit sha.
+# The sha tag is the contract: gitops pins an exact sha, so "which code is
+# running?" is answerable from the pod spec alone. Never deploy :latest —
+# a node cache will happily run a stale :latest while the registry is down.
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  before_script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/Dockerfile"
+      --destination "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - echo "pushed ${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - echo "pin this in gitops -> apps/ingest-worker/deployment.yaml + cronjob.yaml"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
