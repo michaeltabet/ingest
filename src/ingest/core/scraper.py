@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from .context import ScrapeContext
-from .models import Board, RawResult
+from .models import RawResult, Source
 
 
 class Scraper(ABC):
@@ -26,6 +26,6 @@ class Scraper(ABC):
     platform: str = "abstract"
 
     @abstractmethod
-    async def fetch(self, board: Board, ctx: ScrapeContext) -> RawResult:
-        """Acquire raw payloads for one board. Implemented by the FAMILY."""
+    async def fetch(self, source: Source, ctx: ScrapeContext) -> RawResult:
+        """Acquire raw payloads for one source. Implemented by the FAMILY."""
         raise NotImplementedError

@@ -1,16 +1,16 @@
 """Error taxonomy (L0). The distinction that drives retry decisions.
 
 Transient  → worth trying again (the janitor re-runs it on its cadence).
-Permanent  → fail now, flag the board; retrying is pointless.
+Permanent  → fail now, flag the source; retrying is pointless.
 
 We CLASSIFY; Temporal does NOT retry heroically (attempts=1). Failure lands in
-the ledger as data. Cross-run retry is the janitor's job, not the code's.
+the ledger as data. Cross-run retry belongs to the daily pass, not the code.
 """
 from __future__ import annotations
 
 
 class ScrapeError(Exception):
-    """Base for scrape failures. Carries board/url so breakage is LOUD and
+    """Base for scrape failures. Carries source/url so breakage is LOUD and
     precise ('workday: detail 403') — never a silent swallow."""
 
     def __init__(self, message: str, *, status: int | None = None,
@@ -25,7 +25,7 @@ class TransientError(ScrapeError):
 
 
 class PermanentError(ScrapeError):
-    """403 (anti-bot), 404, malformed board — will not heal by retrying."""
+    """403 (anti-bot), 404, malformed source — will not heal by retrying."""
 
 
 def classify(status: int, *, url: str | None = None) -> ScrapeError:

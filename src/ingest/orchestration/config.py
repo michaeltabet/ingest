@@ -1,9 +1,9 @@
-"""Temporal configuration — as classes, from env. THE one home for connection,
-queues, and platform→queue routing. No YAML sprawl, no settings in workflows.
+"""Temporal configuration — resolved from the project's spec, NOTHING baked in.
 
-Worker slot counts are NOT constants here — they reference WorkerSlots
-hypotheses (calibrated). This module only decides WHICH queue a platform's
-work lands on, by its family.
+Precedence: env (secrets / per-process override) > the spec's temporal part.
+There are NO engine defaults for facts: no addresses, no namespace, no queue
+names, no sized numbers live in this file. A missing fact is a loud error
+naming the spec key to set — never a silent localhost.
 """
 from __future__ import annotations
 
@@ -11,26 +11,43 @@ import os
 from dataclasses import dataclass
 
 
+def _spec_parts() -> tuple:
+    """(temporal, calibration) of the active project (INGEST_DOMAIN)."""
+    name = os.environ.get("INGEST_DOMAIN")
+    if not name:
+        raise RuntimeError("INGEST_DOMAIN not set — the engine has no default "
+                           "project and no default temporal facts")
+    from ingest import domains
+    d = domains.get(name)
+    return d.temporal, d.calibration
+
+
+def _req(d: dict, *path):
+    cur = d
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            raise RuntimeError(
+                f"spec is missing fact {'.'.join(path)!r} — declare it in the "
+                f"project's json (the engine bakes in nothing)")
+        cur = cur[key]
+    return cur
+
+
+_SPEC, _CAL = _spec_parts()
+
+
 @dataclass
 class QueueSpec:
     name: str
-    # slots resolved from a WorkerSlots hypothesis at worker startup
-    slots_hypothesis: str = "worker_slots"
 
 
-QUEUE_HTTP = QueueSpec("scrape-http")
-QUEUE_BROWSER = QueueSpec("scrape-browser")
+QUEUE_HTTP = QueueSpec(_req(_SPEC, "task_queue"))
+# browser families route to task_queue_browser when the spec declares one;
+# until then they share the main queue (the browser family raises anyway).
+QUEUE_BROWSER = QueueSpec(_SPEC.get("task_queue_browser",
+                                    _req(_SPEC, "task_queue")))
 
-# family -> queue. HTTP families share a wide/cheap pool; browser families a
-# narrow/fat one (separate image, browser baked in).
-_FAMILY_QUEUE = {
-    "one_shot": QUEUE_HTTP,
-    "paged": QUEUE_HTTP,
-    "paged_detail": QUEUE_HTTP,
-    "html": QUEUE_HTTP,
-    "browser": QUEUE_BROWSER,
-    "browser_session": QUEUE_BROWSER,
-}
+_FAMILY_QUEUE = {"browser": QUEUE_BROWSER, "browser_session": QUEUE_BROWSER}
 
 
 def queue_for(family: str) -> QueueSpec:
@@ -45,22 +62,30 @@ class TemporalConfig:
 
     @classmethod
     def from_env(cls) -> "TemporalConfig":
-        # accept TEMPORAL_ADDRESS (cluster convention) or TEMPORAL_TARGET
+        # env wins (TEMPORAL_ADDRESS cluster convention / TEMPORAL_TARGET),
+        # then the spec's declared address. No literal fallback.
         target = (os.environ.get("TEMPORAL_ADDRESS")
-                  or os.environ.get("TEMPORAL_TARGET") or "127.0.0.1:7233")
+                  or os.environ.get("TEMPORAL_TARGET")
+                  or _req(_SPEC, "address"))
         return cls(
             target=target,
-            namespace=os.environ.get("TEMPORAL_NAMESPACE", "ingest"),
+            namespace=(os.environ.get("TEMPORAL_NAMESPACE")
+                       or _req(_SPEC, "namespace")),
             tls=os.environ.get("TEMPORAL_TLS", "false").lower() == "true",
         )
 
 
-# Fail-loud activity options (white paper §7.2). Deliberate non-values:
-#   attempts = 1        (Temporal default is INFINITE — must be written down)
-#   no heartbeat        (the daily G2 presence gate is the dead-worker detector)
-#   start_to_close      absurd; exists only because the SDK requires one
+# Fail-loud activity options — every number DECLARED in the spec, where the
+# _why comments explaining the doctrine live beside them.
 ACTIVITY_OPTIONS = {
-    "maximum_attempts": 1,
-    "start_to_close_seconds": 30 * 24 * 3600,   # 30d — never meant to fire
-    "heartbeat_seconds": None,
+    "maximum_attempts": int(_req(_SPEC, "retry", "maximum_attempts")),
+    "start_to_close_seconds":
+        int(_req(_SPEC, "timeouts", "start_to_close_days")) * 24 * 3600,
+    "heartbeat_seconds": _SPEC.get("timeouts", {}).get("heartbeat_seconds"),
+}
+
+# worker sizing — a CALIBRATED number from the spec (env WORKER_SLOTS wins)
+WORKER = {
+    "slots": int(_req(_CAL, "worker_slots", "value")),
+    "max_cached_workflows": int(_req(_SPEC, "worker", "max_cached_workflows")),
 }
