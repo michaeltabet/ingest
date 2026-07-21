@@ -45,7 +45,7 @@ _FAIL_LOUD = dict(
 @workflow.defn
 class ScrapeSource:
     @workflow.run
-    async def run(self, platform: str, key: str, domain: str) -> dict:
+    async def run(self, platform: str, key: str, domain: str = "") -> dict:
         # run_id must be UNIQUE PER EXECUTION, not per day: the workflow_id is
         # date-scoped and a same-day refire (janitor TERMINATE_IF_RUNNING)
         # reuses it — batches from the dead attempt would then share the
@@ -60,7 +60,16 @@ class ScrapeSource:
 class PlatformRun:
     @workflow.run
     async def run(self, platform: str, keys: list, run_date: str,
-                  domain: str) -> dict:
+                  domain: str = "") -> dict:
+        # COMPATIBILITY IS FOREVER: this engine's whole point is that
+        # workflows retry until deliberately killed (janitor), so an
+        # execution can be in flight for DAYS across worker deploys. A
+        # signature change that rejects an older caller's recorded input
+        # wedges every in-flight execution in an infinite WorkflowTaskFailed
+        # retry loop that still reports Running (2026-07-19..21: three days
+        # dark, run.<platform>.* stuck on "missing positional argument:
+        # 'domain'"). New params MUST default; the default resolves in the
+        # ACTIVITY (workflows are deterministic, no env reads here).
         # fan out: every source as a child, ALL in flight at once (bounded by
         # worker slots, not by this workflow).
         async def one(key: str):

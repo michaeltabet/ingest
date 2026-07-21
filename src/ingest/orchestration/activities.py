@@ -11,6 +11,7 @@ them directly; only the evidence summary is returned.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from temporalio import activity
 
@@ -89,7 +90,15 @@ async def run_scrape(domain_name: str, platform: str, key: str,
 
 @activity.defn
 async def scrape_source(platform: str, key: str, run_id: str,
-                        domain: str) -> dict:
-    # arg order is Temporal API surface. The project name always arrives
-    # explicitly — the engine has no default project.
+                        domain: str = "") -> dict:
+    # arg order is Temporal API surface. The project name normally arrives
+    # explicitly; an EMPTY domain means the caller predates the domain param
+    # (in-flight executions started before a deploy — see COMPATIBILITY IS
+    # FOREVER in workflows.py) and resolves to this worker's own project.
+    # Activities may read env; workflows must not.
+    if not domain:
+        domain = os.environ.get("INGEST_DOMAIN") or ""
+        if not domain:
+            raise RuntimeError("empty domain and INGEST_DOMAIN unset — "
+                               "cannot resolve project for legacy caller")
     return await run_scrape(domain, platform, key, run_id)
