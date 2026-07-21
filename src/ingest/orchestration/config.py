@@ -78,7 +78,20 @@ class TemporalConfig:
 # Fail-loud activity options — every number DECLARED in the spec, where the
 # _why comments explaining the doctrine live beside them.
 ACTIVITY_OPTIONS = {
+    # 0 = unbounded attempts. Retries are bounded by KIND (see
+    # non_retryable_error_types below and the _DURABLE docstring in
+    # workflows.py), never by a count — a transient fault must not cost a day
+    # of data, and a permanent one must not be retried even once.
     "maximum_attempts": int(_req(_SPEC, "retry", "maximum_attempts")),
+    "retry_initial_seconds": int(_SPEC.get("retry", {}).get("initial_seconds", 10)),
+    # Cap the backoff so a source that was failing while infrastructure was
+    # broken resumes PROMPTLY once it is fixed, instead of sitting in a
+    # multi-hour exponential sleep.
+    "retry_maximum_seconds": int(_SPEC.get("retry", {}).get("maximum_seconds", 300)),
+    # Errors that never heal. Anything NOT named here is retried.
+    "non_retryable_error_types": _SPEC.get("retry", {}).get(
+        "non_retryable_error_types",
+        ["PermanentError", "GateRefused"]),
     "start_to_close_seconds":
         int(_req(_SPEC, "timeouts", "start_to_close_days")) * 24 * 3600,
     "heartbeat_seconds": _SPEC.get("timeouts", {}).get("heartbeat_seconds"),

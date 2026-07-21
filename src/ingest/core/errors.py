@@ -28,6 +28,18 @@ class PermanentError(ScrapeError):
     """403 (anti-bot), 404, malformed source — will not heal by retrying."""
 
 
+class GateRefused(PermanentError):
+    """The source scraped, but its quality gate refused the result.
+
+    Its own type because it is NOT an infrastructure fault: the scrape
+    worked and the data is bad, so retrying it changes nothing. This was
+    raised as a bare RuntimeError until 2026-07-21; once retries became
+    kind-bounded, an untyped gate refusal would have been treated as
+    transient and retried forever — exactly the slot-eating retry
+    population of 2026-07-15. Named in non_retryable_error_types.
+    """
+
+
 def classify(status: int, *, url: str | None = None) -> ScrapeError:
     if status == 429 or 500 <= status <= 599:
         return TransientError(f"transient HTTP {status}", status=status, url=url)

@@ -17,6 +17,7 @@ from temporalio import activity
 
 from ingest import domains
 from ingest.core.context import ScrapeContext
+from ingest.core.errors import GateRefused
 from ingest.utils.http import UrllibClient
 
 
@@ -84,7 +85,11 @@ async def run_scrape(domain_name: str, platform: str, key: str,
     # Fail LOUD: the workflow goes red so a broken source surfaces, never
     # hides. ("empty" completes quietly — zero records is a fact, not a fault.)
     if verdict.failed:
-        raise RuntimeError(verdict.reason)
+        # GateRefused, NOT RuntimeError: retries are bounded by KIND now, and
+        # an untyped error counts as transient and would be retried forever.
+        # A gate refusal is permanent by definition — the scrape succeeded and
+        # the data is bad; running it again produces the same bad data.
+        raise GateRefused(verdict.reason)
     return result.summary()
 
 
