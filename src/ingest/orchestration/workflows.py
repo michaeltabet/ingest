@@ -26,19 +26,45 @@ with workflow.unsafe.imports_passed_through():
     from ingest.orchestration import naming
     from ingest.orchestration.config import ACTIVITY_OPTIONS
 
-_FAIL_LOUD = dict(
-    # DOCTRINE (Michael, re-affirmed 2026-07-16): ONE attempt, fail LOUD.
-    # A failed source = a red workflow + an evidence row; the daily pass is the
-    # retry mechanism AND the dead-worker detector. Unlimited retries (07-15)
-    # created a permanent retry population that ate the worker slots and
-    # re-OOMed pods on sources whose gate could never pass.
-    # No ceiling on a source: a scrape takes as long as it takes. The SDK
-    # requires start_to_close to exist, so config.ACTIVITY_OPTIONS sets it
-    # absurdly high rather than to a number that would kill a slow-but-working
-    # scrape. DERIVED, not restated: this dict and config.py diverged three
-    # ways once (30m docstring / 45m code / 30d config) — never again.
+_DURABLE = dict(
+    # DOCTRINE (Michael, 2026-07-21): Temporal exists for DURABLE EXECUTION.
+    # An infrastructure fault must NOT cost a day of data.
+    #
+    # History of this setting, because both extremes have already burned us:
+    #   2026-07-15  unlimited retries on EVERYTHING -> a permanent retry
+    #               population of sources whose gate could never pass; it ate
+    #               worker slots and re-OOMed pods.
+    #   2026-07-16  attempts=1 on everything -> the opposite failure. On
+    #               2026-07-21 a wrong ClickHouse hostname (doubled helm
+    #               prefix) was live for ~2h and PERMANENTLY killed 1,186
+    #               source scrapes. The fault was fixed minutes later; the
+    #               data was still gone until the next daily pass.
+    #
+    # Neither extreme is right, and the choice was never actually between
+    # them: core.errors ALREADY classifies TransientError vs PermanentError.
+    # That taxonomy just was not wired to the retry policy. Now it is.
+    #
+    #   Transient (429, 5xx, timeouts, connection resets, sink unreachable)
+    #       -> retry forever. This is durable execution; the world blinking
+    #          must not lose the day.
+    #   Permanent (403 anti-bot, 404 gone, malformed source, gate refusal)
+    #       -> ZERO retries. These never heal, and retrying them is exactly
+    #          what created the 07-15 slot-eating population.
+    #
+    # So retries are unbounded in TIME but bounded in KIND. Slot exhaustion is
+    # prevented by never retrying the errors that cannot succeed, not by
+    # capping attempts on errors that can.
     start_to_close_timeout=timedelta(seconds=ACTIVITY_OPTIONS["start_to_close_seconds"]),
-    retry_policy=RetryPolicy(maximum_attempts=ACTIVITY_OPTIONS["maximum_attempts"]),
+    retry_policy=RetryPolicy(
+        maximum_attempts=ACTIVITY_OPTIONS["maximum_attempts"],
+        initial_interval=timedelta(seconds=ACTIVITY_OPTIONS["retry_initial_seconds"]),
+        maximum_interval=timedelta(seconds=ACTIVITY_OPTIONS["retry_maximum_seconds"]),
+        backoff_coefficient=2.0,
+        # Bound by KIND. Anything not named here is treated as transient and
+        # retried — the safe default: a NEW unclassified fault costs latency,
+        # not a day of data.
+        non_retryable_error_types=list(ACTIVITY_OPTIONS["non_retryable_error_types"]),
+    ),
 )
 
 
@@ -53,7 +79,7 @@ class ScrapeSource:
         info = workflow.info()
         run_id = f"{info.workflow_id}/{info.run_id}"
         return await workflow.execute_activity(
-            scrape_source, args=[platform, key, run_id, domain], **_FAIL_LOUD)
+            scrape_source, args=[platform, key, run_id, domain], **_DURABLE)
 
 
 @workflow.defn
