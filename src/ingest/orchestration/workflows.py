@@ -9,8 +9,10 @@ ScrapeSource — one source. Fail-loud: attempts=1, no ceiling on a source's
                detector). The numbers come from config.ACTIVITY_OPTIONS —
                ONE home; this file must never restate them.
 PlatformRun  — parent per platform. FANS OUT children CONCURRENTLY (not a
-               loop): starts all sources at once, gathers results. The worker
-               pool's slot count is the real throughput bound.
+               loop), but BOUNDED to _CHILD_SLOTS pending at a time: Temporal
+               caps pending children at 2000 per workflow and blowing that cap
+               wedges the parent in a silent infinite retry. The worker pool's
+               slot count is still the real throughput bound.
 """
 from __future__ import annotations
 
@@ -25,6 +27,11 @@ with workflow.unsafe.imports_passed_through():
     from ingest.orchestration.activities import scrape_source
     from ingest.orchestration import naming
     from ingest.orchestration.config import ACTIVITY_OPTIONS
+
+# Max children PENDING at once inside ONE PlatformRun. The server's hard cap is
+# 2000; this sits well under it so a platform can grow its board count without
+# silently re-crossing the cliff. Not a throughput knob — see PlatformRun.run.
+_CHILD_SLOTS = 500
 
 _DURABLE = dict(
     # DOCTRINE (Michael, 2026-07-21): Temporal exists for DURABLE EXECUTION.
@@ -96,13 +103,32 @@ class PlatformRun:
         # dark, run.<platform>.* stuck on "missing positional argument:
         # 'domain'"). New params MUST default; the default resolves in the
         # ACTIVITY (workflows are deterministic, no env reads here).
-        # fan out: every source as a child, ALL in flight at once (bounded by
-        # worker slots, not by this workflow).
+        # BOUNDED fan-out. Temporal caps PENDING CHILD WORKFLOWS at 2000 per
+        # workflow (server-side limit.numPendingChildExecutions; our
+        # temporal-dynamic-config is empty, so the default applies). Starting
+        # every source at once blew that cap on any platform with >2000 enabled
+        # boards: the FIRST workflow task failed with
+        #   PendingChildWorkflowsLimitExceeded: the number of pending child
+        #   workflow executions, 2000, has reached the per-workflow limit of 2000
+        # and then retried forever — the parent still reported Running with
+        # HistoryLength 4 and ZERO children, so nothing went red.
+        # 2026-07-23..31: greenhouse(3270)/ashby(2978)/workable(2944) = 9,192 of
+        # 16,852 enabled boards, 54.5% of the fleet, dark for nine nights while
+        # total job counts kept RISING.
+        #
+        # Do NOT "fix" this by raising the server limit — that buys one number
+        # and dies again, silently and identically, at the next board-count
+        # milestone. The bound belongs here, well under the cap. Throughput is
+        # unaffected: the real limiter is WORKER_SLOTS across the worker pool,
+        # and _CHILD_SLOTS only caps how many children are PENDING at once.
+        sem = asyncio.Semaphore(_CHILD_SLOTS)
+
         async def one(key: str):
-            return await workflow.execute_child_workflow(
-                ScrapeSource.run, args=[platform, key, domain],
-                id=naming.source_scrape(platform, key, run_date),
-                id_reuse_policy=WorkflowIDReusePolicy.TERMINATE_IF_RUNNING)
+            async with sem:
+                return await workflow.execute_child_workflow(
+                    ScrapeSource.run, args=[platform, key, domain],
+                    id=naming.source_scrape(platform, key, run_date),
+                    id_reuse_policy=WorkflowIDReusePolicy.TERMINATE_IF_RUNNING)
 
         results = await asyncio.gather(*[one(s) for s in keys],
                                        return_exceptions=True)
