@@ -8,6 +8,16 @@ dependencies = [
     "clickhouse-connect>=0.7",
     "temporalio>=1.6",
     "django>=5.0",
+    # pydantic is imported by src/ingest/test.py and by the jobs layer's
+    # jobs/validation.py, which jobs/discovery/promote.py imports. It was never
+    # declared, so promote.py could not run in ANY image ever built:
+    #   kubectl -n hiredsignal exec deploy/ingest-worker -- \
+    #     python -c "import jobs.validation"
+    #   ModuleNotFoundError: No module named 'pydantic'   (2026-08-11)
+    # Board promotion — candidates -> ingest.boards — has therefore only ever
+    # run by hand, once, on 2026-07-22. Declared here rather than in the jobs
+    # image because both layers import it.
+    "pydantic>=2.7",
 ]
 
 [project.optional-dependencies]
