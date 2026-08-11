@@ -74,6 +74,24 @@ _DURABLE = dict(
     ),
 )
 
+# THE STALL DETECTOR. start_to_close bounds a scrape that RUNS long; only a
+# heartbeat bounds one that stops running. The activity reports after every
+# list page and every detail chunk, each of which is at most one 30s HTTP call
+# from the last, so a healthy scrape reports orders of magnitude more often
+# than any timeout set here — and one that goes quiet is retried in seconds
+# instead of holding its slot until start_to_close (30 days) expires.
+#
+# Measured 2026-08-11, with no heartbeat configured: 2,580 of the night's
+# 16,852 ScrapeSource workflows were still Running eight hours in with their
+# activity 'Started'; 3,331 from 08-10 and 3,233 from 08-09 were STILL Running
+# days later. Those boards are exactly the 15-20% the nightly coverage misses.
+#
+# Absent from the spec -> no heartbeat_timeout, i.e. today's behaviour. Opting
+# in is a one-key change in jobs.json (timeouts.heartbeat_seconds).
+if ACTIVITY_OPTIONS.get("heartbeat_seconds"):
+    _DURABLE["heartbeat_timeout"] = timedelta(
+        seconds=int(ACTIVITY_OPTIONS["heartbeat_seconds"]))
+
 
 @workflow.defn
 class ScrapeSource:

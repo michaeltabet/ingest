@@ -152,6 +152,12 @@ class _HttpFamily(Scraper):
                 res.reported_total = max(res.reported_total, page.total)
             await on_page(page)
             await self._maybe_flush(res, ctx)
+            # PROGRESS, reported to whoever is driving this scrape. Every page
+            # is at most one 30s HTTP call away from the last one, so a healthy
+            # walk reports far more often than any sane heartbeat timeout, and
+            # a walk that stops reporting has stopped working.
+            ctx.heartbeat(f"page {res.pages_fetched} "
+                          f"items {res.items_landed} of {res.reported_total}")
             if not raw_stub_count or page.next_cursor is None:   # empty/last page = done
                 break
             if res.pages_fetched >= MAX_PAGES:
@@ -241,6 +247,12 @@ class PagedDetailScraper(ListScraper):
                 chunk = page.stubs[i:i + self.detail_concurrency]
                 await asyncio.gather(*[
                     self._fetch_detail(s, source, ctx, lock, res) for s in chunk])
+                # A detail-shape source spends nearly all its time in here: one
+                # page of 500 stubs is 10 chunks, and without a report between
+                # them the whole page looks like one long silence.
+                ctx.heartbeat(f"details {res.details_ok} ok "
+                              f"{res.details_failed} failed "
+                              f"{res.details_gone} gone")
 
         await self._walk(source, ctx, res, on_page)
         return res

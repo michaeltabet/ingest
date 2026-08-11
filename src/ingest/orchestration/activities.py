@@ -34,6 +34,26 @@ def _http_client():
         return UrllibClient()
 
 
+def _heartbeat():
+    """The progress reporter handed to the scraper.
+
+    Inside an activity this is temporalio's activity.heartbeat, which is the
+    ONLY thing that makes a stalled scrape visible: without it an activity that
+    stops making progress keeps its 'Started' state until start_to_close
+    expires, so the board is neither scraped nor rescheduled for as long as
+    that timeout is set. Measured 2026-08-11 with no heartbeat configured:
+    2,580 of the night's 16,852 ScrapeSource workflows were still Running 8
+    hours in, their activity 'Started', and the same shape on the two nights
+    before (3,331 and 3,233) — the 15-20% the nightly coverage misses.
+
+    Outside an activity (tests, CLI, offline repair) it is a no-op, so the
+    scrapers stay Temporal-free.
+    """
+    if not activity.in_activity():
+        return lambda *_detail: None
+    return lambda *detail: activity.heartbeat(*detail)
+
+
 async def run_scrape(domain_name: str, platform: str, key: str,
                      run_id: str, http=None) -> dict:
     """One source, end to end: fetch -> stream -> gate -> commit -> verdict.
@@ -58,7 +78,7 @@ async def run_scrape(domain_name: str, platform: str, key: str,
     # source's memory is bounded by the flush threshold, not its catalog size.
     own_http = http is None
     http = http or _http_client()
-    ctx = ScrapeContext(http=http, sink=stream)
+    ctx = ScrapeContext(http=http, sink=stream, heartbeat=_heartbeat())
     try:
         result = await scraper.fetch(source, ctx)
     except Exception as exc:
