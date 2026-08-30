@@ -23,6 +23,7 @@ jobs:
     env:
       NAMESPACE: ingest
       API_SERVER: https://100.94.210.75:6443
+      TLS_SERVER_NAME: platform-k8s-1.tail05f41d.ts.net
       FUNC_VERSION: knative-v1.20.0
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +43,8 @@ jobs:
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
           printf '%s' "${{ secrets.CLUSTER_CA }}" > "$RUNNER_TEMP/ca.crt"
           kubectl config set-cluster platform --server="$API_SERVER" \
-            --certificate-authority="$RUNNER_TEMP/ca.crt" --embed-certs
+            --certificate-authority="$RUNNER_TEMP/ca.crt" --embed-certs \
+            --tls-server-name="$TLS_SERVER_NAME"
           kubectl config set-credentials github-deployer --token="$KUBE_TOKEN"
           kubectl config set-context platform --cluster=platform --user=github-deployer --namespace="$NAMESPACE"
           kubectl config use-context platform
