@@ -24,7 +24,7 @@ jobs:
       NAMESPACE: ingest
       API_SERVER: https://100.71.0.42:6443
       TLS_SERVER_NAME: platform-k8s-1.tail05f41d.ts.net
-      FUNC_VERSION: knative-v1.20.0
+      FUNC_VERSION: knative-v1.23.1
     steps:
       - uses: actions/checkout@v4
 
