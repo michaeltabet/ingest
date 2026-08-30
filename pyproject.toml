@@ -18,6 +18,9 @@ dependencies = [
     # run by hand, once, on 2026-07-22. Declared here rather than in the jobs
     # image because both layers import it.
     "pydantic>=2.7",
+    # The Knative Functions host: func.py at the repository root is what it
+    # runs, and the deploy workflow builds this repository as one function.
+    "func-python>=0.8",
 ]
 
 [project.optional-dependencies]
