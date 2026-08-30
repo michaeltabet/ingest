@@ -5,10 +5,13 @@
 #
 # The runner is the platform's own (terraform/scripts/install-runner.sh,
 # registered to the team's repository the same way), already on the tailnet,
-# so the job needs no network step. One repository secret, issued by the
-# platform team: KUBE_TOKEN, the token of the tenant's github-deployer
-# ServiceAccount (cluster/tenants/_base/ci.yaml). The API server's CA is
-# committed in platform-gitops, so the connection is verified, not trusted.
+# so the job needs no network step. Two repository secrets, issued by the
+# platform team: KUBE_TOKEN, the tenant's github-deployer token
+# (cluster/tenants/_base/ci.yaml), and CLUSTER_CA, the API server's own CA
+# (terraform/platform-k8s.ca.crt). CLUSTER_CA is a secret rather than a
+# runtime fetch because platform-gitops is private: a job's own GITHUB_TOKEN
+# is scoped to its own repository, and a headless runner has no gh session to
+# read a different one. Verified against this CA, not skip-verify.
 name: deploy
 on:
   push:
@@ -37,8 +40,7 @@ jobs:
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          GH_TOKEN="$(gh auth token)" gh api repos/michaeltabet/platform-gitops/contents/terraform/platform-k8s.ca.crt \
-            -q .content | base64 -d > "$RUNNER_TEMP/ca.crt"
+          printf '%s' "${{ secrets.CLUSTER_CA }}" > "$RUNNER_TEMP/ca.crt"
           kubectl config set-cluster platform --server="$API_SERVER" \
             --certificate-authority="$RUNNER_TEMP/ca.crt" --embed-certs
           kubectl config set-credentials github-deployer --token="$KUBE_TOKEN"
