@@ -37,7 +37,7 @@ jobs:
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          gh api repos/michaeltabet/platform-gitops/contents/terraform/platform-k8s.ca.crt \
+          GH_TOKEN="$(gh auth token)" gh api repos/michaeltabet/platform-gitops/contents/terraform/platform-k8s.ca.crt \
             -q .content | base64 -d > "$RUNNER_TEMP/ca.crt"
           kubectl config set-cluster platform --server="$API_SERVER" \
             --certificate-authority="$RUNNER_TEMP/ca.crt" --embed-certs
