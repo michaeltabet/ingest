@@ -1,0 +1,59 @@
+# Copy this file to .github/workflows/deploy.yml in the team's repository, set
+# NAMESPACE, and every push to main deploys every function in the repository.
+# Nothing here is Kubernetes: the job runs `func deploy`, the same command a
+# developer runs from a laptop, as the tenant's github-deployer account.
+#
+# The runner is the platform's own (terraform/scripts/install-runner.sh,
+# registered to the team's repository the same way), already on the tailnet,
+# so the job needs no network step. One repository secret, issued by the
+# platform team: KUBE_TOKEN, the token of the tenant's github-deployer
+# ServiceAccount (cluster/tenants/_base/ci.yaml). The API server's CA is
+# committed in platform-gitops, so the connection is verified, not trusted.
+name: deploy
+on:
+  push:
+    branches: [main]
+concurrency: deploy
+jobs:
+  deploy:
+    runs-on: [self-hosted, macOS]
+    env:
+      NAMESPACE: ingest
+      API_SERVER: https://100.94.210.75:6443
+      CA_URL: https://raw.githubusercontent.com/michaeltabet/platform-gitops/main/terraform/platform-k8s.ca.crt
+      FUNC_VERSION: knative-v1.20.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: func
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/bin/func" \
+            "https://github.com/knative/func/releases/download/$FUNC_VERSION/func_darwin_arm64"
+          chmod +x "$RUNNER_TEMP/bin/func"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: kubeconfig from the deployer token
+        env:
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          curl -fsSL -o "$RUNNER_TEMP/ca.crt" "$CA_URL"
+          kubectl config set-cluster platform --server="$API_SERVER" \
+            --certificate-authority="$RUNNER_TEMP/ca.crt" --embed-certs
+          kubectl config set-credentials github-deployer --token="$KUBE_TOKEN"
+          kubectl config set-context platform --cluster=platform --user=github-deployer --namespace="$NAMESPACE"
+          kubectl config use-context platform
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+
+      - name: deploy every function
+        run: |
+          find . -name func.yaml -not -path '*/node_modules/*' -exec dirname {} \; | while read -r dir; do
+            echo "== $dir"
+            (cd "$dir" && func deploy --remote --namespace "$NAMESPACE" \
+              --registry "registry.registry.svc:5000/$NAMESPACE")
+          done
+
+      - name: forget the kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/kubeconfig"

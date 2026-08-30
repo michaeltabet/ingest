@@ -1,0 +1,33 @@
+# The ingest worker as a Knative Function: pushed from this repository by
+# .github/workflows/deploy.yml, built on the cluster, run in the ingest
+# namespace. The worker is a Temporal poller, not a request handler, so it
+# is pinned to one replica and never scales to zero; the HTTP side exists
+# only so Knative can tell it is alive.
+specVersion: 0.36.0
+name: ingest-worker-http
+runtime: python
+registry: registry.registry.svc:5000/ingest
+build: git
+deploy:
+  namespace: ingest
+  options:
+    scale:
+      min: 1
+      max: 1
+  envs:
+    - name: WORKER_QUEUE
+      value: scrape-http
+    - name: TEMPORAL_TARGET
+      value: temporal-frontend.data.svc:7233
+    - name: TEMPORAL_NAMESPACE
+      value: ingest
+    - name: INGEST_DOMAIN
+      value: hiredsignal
+    - name: INGEST_PIPELINES
+      value: /etc/ingest-pipelines
+    - name: CH_HOST
+      value: clickhouse.data.svc
+    - name: CH_PORT
+      value: "8123"
+    - name: CH_DATABASE
+      value: ingest
