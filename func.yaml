@@ -3,18 +3,16 @@
 # namespace. The worker is a Temporal poller, not a request handler, so it
 # is pinned to one replica and never scales to zero; the HTTP side exists
 # only so Knative can tell it is alive.
+#
+# Schema is func v1.23's: `build` is an object (and empty here — the source
+# is uploaded by the workflow, not pulled from git), and envs live under
+# `run`, which is where the deployer reads them from.
 specVersion: 0.36.0
 name: ingest-worker-http
 created: 2026-08-23T00:00:00.000000+00:00
 runtime: python
 registry: registry.registry.svc:5000/ingest
-build: git
-deploy:
-  namespace: ingest
-  options:
-    scale:
-      min: 1
-      max: 1
+run:
   envs:
     - name: WORKER_QUEUE
       value: scrape-http
@@ -32,3 +30,9 @@ deploy:
       value: "8123"
     - name: CH_DATABASE
       value: ingest
+deploy:
+  namespace: ingest
+  options:
+    scale:
+      min: 1
+      max: 1
