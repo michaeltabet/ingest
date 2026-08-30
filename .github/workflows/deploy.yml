@@ -20,7 +20,6 @@ jobs:
     env:
       NAMESPACE: ingest
       API_SERVER: https://100.94.210.75:6443
-      CA_URL: https://raw.githubusercontent.com/michaeltabet/platform-gitops/main/terraform/platform-k8s.ca.crt
       FUNC_VERSION: knative-v1.20.0
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +37,8 @@ jobs:
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
         run: |
           export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          curl -fsSL -o "$RUNNER_TEMP/ca.crt" "$CA_URL"
+          gh api repos/michaeltabet/platform-gitops/contents/terraform/platform-k8s.ca.crt \
+            -q .content | base64 -d > "$RUNNER_TEMP/ca.crt"
           kubectl config set-cluster platform --server="$API_SERVER" \
             --certificate-authority="$RUNNER_TEMP/ca.crt" --embed-certs
           kubectl config set-credentials github-deployer --token="$KUBE_TOKEN"
