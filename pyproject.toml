@@ -1,5 +1,9 @@
 [project]
-name = "ingest"
+# "function" is func's contract, not a choice: the Knative Functions host
+# scaffolds a wrapper that depends on this project under that exact name
+# (templates/python), and the on-cluster build fails on any other. The
+# import package is still `ingest` (see tool.hatch wheel packages).
+name = "function"
 version = "0.1.0"
 description = "HiredSignal job-board scraper / ingest (Python)"
 requires-python = ">=3.9"
