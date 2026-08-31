@@ -11,6 +11,11 @@ created: 2026-08-23T00:00:00Z
 build:
   builder: pack
 run:
+  volumes:
+  - configMap: ingest-pipelines
+    path: /etc/ingest-pipelines
+  - configMap: ingest-pipelines-overlay-cluster
+    path: /etc/ingest-pipelines/overlays/cluster
   envs:
   - name: WORKER_QUEUE
     value: scrape-http
@@ -19,7 +24,9 @@ run:
   - name: TEMPORAL_NAMESPACE
     value: ingest
   - name: INGEST_DOMAIN
-    value: hiredsignal
+    value: jobs
+  - name: INGEST_OVERLAY
+    value: cluster
   - name: INGEST_PIPELINES
     value: /etc/ingest-pipelines
   - name: CH_HOST

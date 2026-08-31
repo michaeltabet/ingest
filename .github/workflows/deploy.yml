@@ -50,6 +50,18 @@ jobs:
           kubectl config use-context platform
           echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
 
+      # The worker's pipeline specs, vendored in pipelines/ (source of truth is
+      # the ingest-pipelines repository), delivered as ConfigMaps the function
+      # mounts at /etc/ingest-pipelines (func.yaml run.volumes).
+      - name: pipeline spec ConfigMaps
+        run: |
+          kubectl create configmap ingest-pipelines \
+            --from-file=jobs.json=pipelines/jobs.json \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create configmap ingest-pipelines-overlay-cluster \
+            --from-file=jobs.json=pipelines/overlays/cluster/jobs.json \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: deploy every function
         run: |
           find . -name func.yaml -not -path '*/node_modules/*' -exec dirname {} \; | while read -r dir; do

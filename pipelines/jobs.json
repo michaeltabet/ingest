@@ -1,0 +1,189 @@
+{
+  "_comment": "THE jobs order form. Keys starting with _ are comments. Every value here is a FACT or a one-word pick into an engine library; logic lives in the engine repo. Overlays (declared below) override per-key.",
+  "project": {
+    "name": "jobs",
+    "description": "job-board scraping - 13 ATS platforms, ~5,671 boards, nightly"
+  },
+  "code": {
+    "_what": "the jobs project's OWN repo (gate/sink/platforms/discovery) - not the engine, not this repo",
+    "path": "~/jobs-scraper"
+  },
+  "temporal": {
+    "_address": "which Temporal: production cluster Temporal, reached via port-forward today; the in-cluster DNS replaces this in a 'cluster' overlay when the gitops deploy lands",
+    "address": "127.0.0.1:7233",
+    "ui": "https://temporal.tail05f41d.ts.net",
+    "namespace": "ingest",
+    "task_queue": "scrape-http",
+    "retry": {
+      "_why": "FAIL LOUD doctrine: one attempt; the daily pass is the retry mechanism. Temporal's default is INFINITE - this must stay written down.",
+      "maximum_attempts": 1
+    },
+    "timeouts": {
+      "_why": "no ceiling on a source: start_to_close absurdly high because the SDK requires one; no heartbeat - the daily presence gate is the dead-worker detector",
+      "start_to_close_days": 30,
+      "heartbeat_seconds": null
+    },
+    "payload_max_bytes": 2097152,
+    "_payload": "the 2MB law: raw bytes NEVER travel through Temporal - sinks write them, workflows carry counts",
+    "worker": {
+      "_slots": "see calibration.worker_slots - the number lives THERE, once",
+      "max_cached_workflows": 100
+    }
+  },
+  "trigger": {
+    "_what": "one PlatformRun per enabled platform per night (python -m ingest.orchestration.trigger)",
+    "sources_limit": null,
+    "_sources_limit": "null = full fleet; an integer caps boards/platform for a bounded wave"
+  },
+  "database": {
+    "_which": "which ClickHouse: production, database `ingest`, reached via port-forward today (in-cluster DNS via a 'cluster' overlay later)",
+    "kind": "clickhouse",
+    "host": "127.0.0.1",
+    "port": 8123,
+    "database": "ingest",
+    "user_env": "CH_USER",
+    "password_env": "CH_PASSWORD",
+    "_creds": "credentials ONLY as env-var NAMES here - secrets never in git; env values win over host/port/database above"
+  },
+  "scrapers": {
+    "package": "jobs.platforms"
+  },
+  "gate": {
+    "ref": "jobs.gate:JobsGate"
+  },
+  "sink": {
+    "ref": "jobs.sink:JobsClickHouseSink"
+  },
+  "source": {
+    "_what": "the key resolver, ONE WORD from the engine's resolver library; for jobs a key IS a board slug, stated here (key_column) - the engine never knows the word",
+    "resolver": "clickhouse-table",
+    "inventory": "clickhouse:boards",
+    "key_column": "slug"
+  },
+  "k8s": {
+    "_what": "declared deploy facts consumed by the gitops manifests - never applied from here",
+    "worker_replicas": 1,
+    "worker_memory": "2Gi"
+  },
+  "overlays": {
+    "_what": "per-instance overrides in overlays/<name>/jobs.json, selected with INGEST_OVERLAY=<name>; each restates ONLY what it changes",
+    "local": "laptop via port-forwards (same as base today - exists so the mechanism is exercised)",
+    "cluster": "in-cluster: Temporal and ClickHouse by service DNS in the data namespace, set by the worker Deployment"
+  },
+  "platforms": {
+    "ashby": {
+      "type": "one_step",
+      "resolver": "derived"
+    },
+    "bamboohr": {
+      "type": "multi_step",
+      "resolver": "derived"
+    },
+    "greenhouse": {
+      "type": "one_step",
+      "resolver": "derived"
+    },
+    "icims": {
+      "type": "multi_step",
+      "resolver": "derived"
+    },
+    "lever": {
+      "type": "one_step",
+      "resolver": "derived"
+    },
+    "oracle": {
+      "type": "multi_step",
+      "resolver": "stored_url"
+    },
+    "personio": {
+      "type": "multi_step",
+      "resolver": "derived"
+    },
+    "recruitee": {
+      "type": "one_step",
+      "resolver": "derived"
+    },
+    "smartrecruiters": {
+      "type": "multi_step",
+      "resolver": "derived"
+    },
+    "taleo": {
+      "type": "one_step",
+      "resolver": "stored_url"
+    },
+    "teamtailor": {
+      "type": "one_step",
+      "resolver": "derived"
+    },
+    "workable": {
+      "type": "one_step",
+      "resolver": "derived"
+    },
+    "workday": {
+      "type": "multi_step",
+      "resolver": "stored_url"
+    }
+  },
+  "calibration": {
+    "_what": "the sized numbers - LEARNED from the ledger, never invented; lo/hi bounds are physics and stay hard. A weekly recalibration writes value back here via MR.",
+    "worker_slots": {
+      "value": 16,
+      "lo": 1,
+      "hi": 200,
+      "_why": "16 x 2Gi = ~128Mi headroom/slot; failures stay attributable (2026-07-16)"
+    },
+    "detail_concurrency": {
+      "value": 50,
+      "lo": 1,
+      "hi": 50,
+      "_why": "concurrent detail fetches per source; AIMD down on 429s"
+    },
+    "batch_size": {
+      "value": 100,
+      "lo": 1,
+      "hi": 500,
+      "_why": "sources per child batch (future batching)"
+    },
+    "refetch_days": {
+      "value": 30,
+      "lo": 1,
+      "hi": 90,
+      "_why": "full re-fetch interval - heals silently-edited details"
+    },
+    "floor_days": {
+      "value": 7,
+      "lo": 1,
+      "hi": 30,
+      "_why": "max staleness regardless of score"
+    }
+  },
+  "observability": {
+    "_what": "the dashboard is CODE (engine's observability library); views pick which tables it builds",
+    "kind": "superset",
+    "url": "https://superset.tail05f41d.ts.net",
+    "user_env": "SUPERSET_USER",
+    "password_env": "SUPERSET_PASSWORD",
+    "dashboard": "jobs",
+    "views": [
+      "test_run",
+      "jobs"
+    ]
+  },
+  "scheduler": {
+    "_what": "what fires the nightly run - the config repo's dags/ renders one Airflow DAG per spec from this",
+    "kind": "airflow",
+    "cron": null,
+    "_cron": "null = manual only; set a cron string and the generated DAG arms itself"
+  },
+  "test": {
+    "_what": "THE TEST - escalation ladder: random fresh boards per rung, 4 -> 8 -> 16 -> PROVEN; a board is never tested twice; pass = evidence success AND the data validator",
+    "validator": "jobs.quality:validate",
+    "ladder": [
+      10,
+      25,
+      50
+    ],
+    "evidence_table": "scrape_evidence",
+    "data_table": "jobs"
+  }
+}

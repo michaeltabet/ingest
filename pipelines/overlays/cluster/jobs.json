@@ -1,0 +1,14 @@
+{
+  "_comment": "The `cluster` overlay: what changes when the jobs project runs inside the platform cluster instead of on a laptop behind port-forwards. Selected with INGEST_OVERLAY=cluster, which the worker Deployment sets. Only the keys that differ appear here — everything else still comes from ../../jobs.json, and env still wins over both.",
+
+  "temporal": {
+    "_address": "In-cluster DNS. The Temporal chart releases as `temporal` into the data namespace, so the frontend is temporal-frontend.data on the gRPC port. The port-forward in the base spec was always a stand-in for this line.",
+    "address": "temporal-frontend.data.svc.cluster.local:7233"
+  },
+
+  "database": {
+    "_which": "The Altinity operator names a ClickHouseInstallation's service clickhouse-<chi>, and data/clickhouse.yaml calls the installation `platform`. Port 8123 is the HTTP interface, which is what the base spec already speaks.",
+    "host": "clickhouse-platform.data.svc.cluster.local",
+    "port": 8123
+  }
+}
